@@ -1,0 +1,6 @@
+name: Low Earth orbit (400 km)
+perigee_alt_km: 400.0
+apogee_alt_km: 400.0
+inclination_deg: 28.5
+escape_provided: false
+min_thrust_alt_km: 0.0

@@ -1,0 +1,14 @@
+name: Example thruster, small
+source: synthetic - illustrative, not a real product
+# A low-power Hall-effect-class unit: modest thrust, modest efficiency, cheap to fly several of.
+# Round numbers chosen to span the design space alongside the mid and large examples, so a sweep
+# over all three shows the thrust-versus-efficiency trade the tool exists to explore.
+isp_s: 1500.0
+thrust_mN: 50.0
+power_W: 1000.0
+mass_kg: 5.0
+cost_musd: 1.0
+propellant: xenon
+ppu_bus_side: low
+throughput_kg: 80
+lifetime_ignitions: 10000

@@ -1,0 +1,6 @@
+name: Iodine
+cost_per_kg: 1000.0
+density_kg_m3: 3213.6
+coolprop_name: null
+thrust_scale: 0.9695
+isp_scale: 0.9147

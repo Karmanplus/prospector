@@ -1,0 +1,6 @@
+name: Sun-synchronous orbit (500 km rideshare)
+perigee_alt_km: 500.0
+apogee_alt_km: 500.0
+inclination_deg: 97.4
+escape_provided: false
+min_thrust_alt_km: 0.0

@@ -1,0 +1,158 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "prospector"
+version = "0.3.3"
+description = "Asteroid mission trajectory reachability analysis"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+# These are the library's pip-installable dependencies. The trajectory-design solvers add
+# two more that are NOT on PyPI for x86_64 -- PyKEP (the Sims-Flanagan low-thrust leg) and
+# a matching PyGMO -- so the environment is managed by pixi, which pulls those two (plus
+# the compiled scientific core, for one consistent NumPy ABI) from conda-forge and the
+# rest from here. See [tool.pixi] below; teammates run `pixi install` (see README).
+# MONTE is not listed: it is a licensed external sibling invoked over a socket.
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "pyarrow>=14",
+    "pydantic>=2.0",        # v1 validators/model_* APIs are not compatible
+    "pyyaml>=6.0",
+    # Round-trip YAML, used only when writing a config file back: it keeps the comments that
+    # carry each coefficient's rationale, which a plain dump regenerates away.
+    "ruamel.yaml>=0.18",
+    "requests>=2.31",
+    "plotly>=5.18",
+    "kaleido>=0.2.1",
+    "fpdf2>=2.7",
+    # Backs NiceGUI's native (desktop-window) mode; pulls its OS webview backend on
+    # Windows/macOS via platform markers. The app falls back to a browser tab without it.
+    "pywebview>=4.4",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+]
+# The desirability axis. Reachability and the trajectory ladder do not need any of this, and
+# without it the app degrades to reachability-only rather than failing, so it stays optional:
+# a deployment that only wants trajectories should not carry a small-body identity resolver.
+enrichment = [
+    "space-rocks>=1.9",     # SsODNet: identity resolution + the aggregated literature values
+]
+# The hydration classifier's spectral input. Split out from `enrichment` on purpose: `classy`
+# pulls a deep-learning stack for what is one display column, so it is opted into separately.
+# Without it the classifier reports an unknown class and everything else still runs.
+enrichment-spectra = [
+    "space-classy>=0.8",    # public spectral surveys + the Mahlke taxonomy's component scores
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["prospector"]
+
+# The trained hydration-classifier weights are a model, not configuration: they travel with
+# the code so an installation cannot end up with the classifier and no network to run it on.
+[tool.hatch.build.targets.wheel.force-include]
+"prospector/enrichment/models/hydration_model.npz" = "prospector/enrichment/models/hydration_model.npz"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# A handful of tests run a real optimizer rather than a stub, so they cost tens of seconds each.
+# They stay in the default run (they are the ones that prove a trajectory actually closes, which
+# is the tool's whole claim); the marker exists so a tight edit loop can skip them with
+# `-m "not slow"`.
+markers = [
+    "slow: runs a real solve; tens of seconds",
+]
+
+# ---------------------------------------------------------------------------
+# ruff: the lint gate. Run `pixi run lint` (or `pixi run lint-fix`).
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E4", "E7", "E9",  # pycodestyle: imports, statements, syntax
+    "F",               # pyflakes: unused/undefined names
+    "I",               # isort: one import order
+    "B",               # bugbear: likely bugs
+    "UP",              # pyupgrade: modern syntax for the Python we actually target
+]
+# The numeric code zips arrays that are equal-length by construction (a grid axis with its
+# own values), so an explicit strict= on every call would be noise rather than a check.
+ignore = [
+    "B905",
+    # PEP 695 type parameters. The one generic helper here reads fine with its TypeVar, and
+    # switching a single function to the new syntax would leave the file in two styles.
+    "UP047",
+]
+
+# ---------------------------------------------------------------------------
+# pixi: the environment manager. `pixi install` builds one env with everything.
+#
+# PyKEP has no x86_64 PyPI wheel (its only modern wheel is aarch64-conda), and a local
+# source build needs heyoka/LLVM/Boost via conda anyway -- so the real upstream PyKEP is
+# pulled from conda-forge here, along with PyGMO and the NumPy-linked compiled core (numpy,
+# scipy, pandas, pyarrow) so every C-extension shares one NumPy ABI. Everything
+# pure-Python / web (plotly, ...) comes from PyPI via the editable project install below.
+# conda-forge ships pykep 3.0.0 for py312 on every platform listed. PyPI has a 3.0.1, but with
+# Linux-only wheels and no sdist (pygmo likewise), so pulling either from PyPI would drop the Mac
+# and Windows platforms below.
+# ---------------------------------------------------------------------------
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64", "osx-64", "win-64"]
+
+[tool.pixi.dependencies]
+python = "3.12.*"
+# Lower-bounded, not left open: 3.x moved the whole trajectory-optimization surface this code
+# builds on (pk.planet became a type-erasing wrapper over pk.udpla, direct_pl2pl became
+# trajopt.sf_pl2pl with a reordered decision vector and an ANALYTIC gradient, propagate_taylor
+# became the ta.zoh_kep integrator). An unpinned solve would let a relock fall back to 2.6, where
+# none of those names exist, so the bound is what keeps the environment and the source in step.
+pykep = ">=3"
+
+pygmo = "*"              # MBH + local optimizers for the Sims-Flanagan solve
+numpy = "*"
+scipy = "*"
+pandas = "*"
+pyarrow = "*"
+nicegui = "*"
+coolprop = "*"           # real-fluid (EOS) propellant density at tank P/T; optional at
+#                          runtime (lazy import, falls back to the gas's authored density)
+
+# No Linux webview backend is installed: the native desktop window is Windows/macOS only,
+# where pywebview uses the reliable OS webview (Edge WebView2 / Cocoa WebKit). On Linux the
+# only conda-forge web-view engine is Qt/QtWebEngine, whose build crashes on launch here, so
+# Linux runs the app as a browser tab instead (see ui/app.py). This keeps the env lean.
+
+[tool.pixi.pypi-dependencies]
+# Installs the project editable, pulling its [project.dependencies] from PyPI. The compiled
+# packages above are satisfied by the conda-forge versions (one NumPy ABI for all of them).
+prospector = { path = ".", editable = true }
+
+# The desirability axis, as its own feature. `pixi run app` gets reachability and the
+# trajectory ladder; `pixi run -e enrichment app` adds target characterization. The split is
+# what lets the default environment stay lean and what proves the app degrades calmly without
+# the extra -- a claim that is only true if somebody actually runs it that way.
+[tool.pixi.feature.enrichment.pypi-dependencies]
+space-rocks = ">=1.9"
+
+[tool.pixi.environments]
+default = { features = ["dev"], solve-group = "default" }
+enrichment = { features = ["dev", "enrichment"], solve-group = "default" }
+
+[tool.pixi.tasks]
+app = "python ui/app.py"           # the app: native window on Windows/macOS, browser tab on Linux (set PROSPECTOR_UI=web to force a tab)
+test = "pytest -q"
+lint = "ruff check prospector ui scripts tests worker.py"
+lint-fix = "ruff check --fix prospector ui scripts tests worker.py"
+check = { depends-on = ["lint", "test"] }

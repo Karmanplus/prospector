@@ -1,0 +1,6 @@
+name: Sun-Earth L2 (deep-space vantage)
+# Sun-Earth L2 is a near-zero-energy node on an Earth escape/return trajectory ~1.5M km
+# anti-sunward; insertion is small (~0.1-0.3 km/s) since arrival energy is already near it.
+arrival_vinf_kms: 0.3
+insertion_dv_kms: 0.3
+description: Sun-Earth L2 -- deep-space vantage ~1.5M km anti-sunward.

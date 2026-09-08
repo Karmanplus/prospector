@@ -1,0 +1,6 @@
+name: Lunar distant retrograde orbit
+# Insertion into a lunar DRO is ~0.8-1.0 km/s in Gateway/DRO trade studies for a
+# high-energy approach.
+arrival_vinf_kms: 0.4
+insertion_dv_kms: 0.9
+description: Lunar distant retrograde orbit -- a stable cislunar parking orbit.

@@ -1,0 +1,19 @@
+name: Example thruster, large
+source: synthetic - illustrative, not a real product
+# A high-power, high-Isp unit. One of these replaces several small ones on a large bus, which is
+# the comparison the design-space sweep is built to make.
+isp_s: 4000.0
+thrust_mN: 300.0
+power_W: 10000.0
+mass_kg: 25.0
+cost_musd: 5.0
+propellant: xenon
+ppu_bus_side: high
+throughput_kg: 900
+lifetime_ignitions: 6000
+# A measured throttle curve would go here; with one, thrust AND Isp fall together when the array
+# cannot supply rated power. Without it the thruster throttles at constant Isp.
+power_curve:
+- {power_W: 4000.0, thrust_mN: 120.0, isp_s: 3200.0}
+- {power_W: 7000.0, thrust_mN: 210.0, isp_s: 3700.0}
+- {power_W: 10000.0, thrust_mN: 300.0, isp_s: 4000.0}

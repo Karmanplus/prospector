@@ -1,0 +1,64 @@
+# Sizing and cost coefficients for the EXAMPLE library. Every number here is a neutral placeholder
+# at a plausible order of magnitude, not a measurement or a quote. An installation replaces this
+# file with its own coefficients; nothing in source depends on these values.
+#
+# Power budget (worst operating mode sizes the array).
+housekeeping_W: 165.0
+ops_load_W: 600.0
+power_margin_pct: 0.0
+array_specific_power_W_m2: 300.0
+
+# Power-conversion chain, array -> loads. See docs/physics.md for which load pays which stage.
+# Transmission is the array-to-bus WIRING loss only; the array's temperature and sun-distance
+# response are modelled separately below, so do not fold them in here.
+transmission_eff_pct: 98.0
+hvlv_converter_eff_pct: 93.0
+ppu_eff_pct: 90.0
+pcdu_kg_per_kW: 1.0
+
+# Solar-array physics: optical/thermal response and the piecewise power-to-mass curve. Rounded
+# triple-junction-panel values (a sunlit panel at 1 AU settles near 60 degC); a real array's
+# measured response replaces them.
+array_alpha_front: 0.89
+array_epsilon_front: 0.88
+array_alpha_rear: 0.34
+array_epsilon_rear: 0.87
+array_earth_albedo_W_m2: 408.3
+array_earth_ir_W_m2: 250.0
+array_cell_eff_slope_pct_per_C: -0.06
+array_cell_eff_intercept_pct: 31.0
+# The cell temperature the array's datasheet wattage is quoted at (28 degC is standard). A sunlit
+# panel at 1 AU runs hotter, so the array a vehicle's operating power needs is rated higher.
+array_rating_temp_C: 28.0
+array_mass_scale: 1.0
+# Roughly 100 W/kg with a small-wing floor. A real vendor curve has steps where construction
+# changes between array families; this one is smooth because inventing seams would misrepresent
+# hardware nobody has quoted.
+array_mass_curve:
+- {lo_W: 50.0, hi_W: 500.0, w0: 50.0, kg0: 1.0, w1: 500.0, kg1: 5.0}
+- {lo_W: 500.0, hi_W: 5000.0, w0: 500.0, kg0: 5.0, w1: 5000.0, kg1: 50.0}
+- {lo_W: 5000.0, hi_W: 100000.0, w0: 5000.0, kg0: 50.0, w1: 100000.0, kg1: 1000.0}
+
+# Mass budget: current-best-estimate ratios of dry mass, with NO growth allowance on top (the
+# leftover dry mass is the reserve -- see buildability.BusModel).
+fixed_bus_ratio_pct: 13.0
+structure_ratio_pct: 20.0
+thermal_ratio_pct: 1.0
+harness_ratio_pct: 4.0
+
+# Propellant tank: a pressure vessel sized from the propellant volume. Generic composite values.
+tank_base_mass_kg: 6.77
+tank_length_diameter_ratio: 2.0
+tank_pressure_bar: 150.0
+tank_temperature_C: 20.0
+tank_safety_factor: 1.5
+tank_wall_strength_pa: 850000000.0
+tank_wall_density_kg_m3: 1600.0
+tank_wall_factor: 1.2
+
+# Cost: comparison-grade placeholders only. Launch is excluded.
+cell_cost_per_W: 300.0
+propellant_cost_per_kg: 2500.0
+bus_cost_per_kg_kusd: 150.0
+iat_pct: 15.0
+pm_pct: 10.0

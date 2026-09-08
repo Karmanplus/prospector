@@ -1,0 +1,6 @@
+name: Krypton
+cost_per_kg: 300.0
+density_kg_m3: 684.76
+coolprop_name: Krypton
+thrust_scale: 0.83
+isp_scale: 1.0377

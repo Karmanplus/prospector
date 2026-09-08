@@ -1,0 +1,13 @@
+name: Example thruster, mid
+source: synthetic - illustrative, not a real product
+# A mid-power unit trading thrust for specific impulse: fewer units needed than the small one,
+# and markedly more propellant-efficient.
+isp_s: 2500.0
+thrust_mN: 200.0
+power_W: 5000.0
+mass_kg: 14.0
+cost_musd: 2.5
+propellant: xenon
+ppu_bus_side: high
+throughput_kg: 400
+lifetime_ignitions: 8000

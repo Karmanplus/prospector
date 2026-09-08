@@ -1,0 +1,3 @@
+name: Direct escape (C3 >= 0 injection)
+# The launch vehicle injects hyperbolic, so there is no drop-off orbit and no SEP escape spiral.
+escape_provided: true

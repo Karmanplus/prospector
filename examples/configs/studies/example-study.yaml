@@ -1,0 +1,18 @@
+name: Example study
+# The reproducible artifact: one mission, one vehicle, and the two screening axes. The target is
+# 2008 EV5, a well-characterised public near-Earth asteroid and a common reference in the
+# low-thrust literature.
+mission: example-rendezvous
+vehicle: example-bus
+target: 2008 EV5
+screening:
+  h_max: 22.0
+  dv_margin_factor: 1.0
+  reference: 2008 EV5
+desirability:
+  min_tier: null
+  taxonomy_include: []
+  min_period_h: null
+  max_period_h: null
+  min_diameter_m: null
+  max_diameter_m: null

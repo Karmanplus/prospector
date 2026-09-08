@@ -1,0 +1,8 @@
+name: Geostationary transfer orbit (250 x 35786 km)
+perigee_alt_km: 250.0
+apogee_alt_km: 35786.0
+inclination_deg: 27.0
+escape_provided: false
+# Coast below this altitude: hold thrust until clear of the inner (proton) belt, where
+# array degradation per unit time is worst -- raise the orbit from the apogee side instead.
+min_thrust_alt_km: 23622.0

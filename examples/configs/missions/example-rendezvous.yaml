@@ -1,0 +1,15 @@
+name: Example rendezvous
+# A one-way rendezvous with a public near-Earth asteroid, launched into sun-synchronous orbit so
+# the escape spiral is genuinely flown (a direct-escape launch type would skip it entirely).
+launch_window:
+- '2029-01-01'
+- '2029-03-31'
+launch_orbit: SSO
+arrive_by: '2031-06-01'
+return_trip: false
+return_by: null
+return_destination: EML2
+return_orbit_insert_dv: null
+return_max_tof_days: null
+time_at_asteroid: 0.0
+asteroid_payload_mass: 0.0

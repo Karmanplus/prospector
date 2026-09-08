@@ -1,0 +1,6 @@
+name: Xenon
+cost_per_kg: 2500.0
+density_kg_m3: 1990.5
+coolprop_name: Xenon
+thrust_scale: 1.0
+isp_scale: 1.0

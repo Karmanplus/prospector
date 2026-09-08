@@ -1,0 +1,75 @@
+# The public gate. Mirrors the GitLab pipeline this repository is exported from: lint and the
+# test suite as independent verdicts, plus the documented install path.
+#
+# `locked: true` matches the pipeline's `pixi install --locked`: it fails when pixi.lock does not
+# match pyproject.toml rather than quietly resolving something newer, so a green run always
+# describes the dependency set the lockfile pins.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Independent so a formatting violation cannot hide a failing test, or the reverse.
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0
+        with:
+          locked: true
+      # Bounded, so a run that finishes its work and then fails to exit shows up as a failure with
+      # something to read rather than as a job that never ends.
+      # Run it in the background so a command that produces its result and then fails to exit can
+      # be looked at while it is still stuck, rather than after a kill has cleared the evidence.
+      - name: ${{ matrix.task }}
+        run: |
+          set +e
+          pixi run ${{ matrix.task }} &
+          pid=$!
+          for _ in $(seq 1 60); do
+            sleep 5
+            kill -0 "$pid" 2>/dev/null || break
+          done
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "::error::${{ matrix.task }} has not exited after 300s"
+            echo "--- process tree"; ps -ef --forest | tail -40
+            echo "--- descendants of $pid"; pgrep -a -P "$pid" || echo "  none"
+            echo "--- open pipes held by the group"
+            ls -l /proc/"$pid"/fd 2>/dev/null || true
+            for t in /proc/"$pid"/task/*; do
+              echo "  thread $(basename "$t") wchan=$(cat "$t"/wchan 2>/dev/null)"
+            done
+            kill -9 -"$pid" 2>/dev/null; kill -9 "$pid" 2>/dev/null
+            wait "$pid"; exit 1
+          fi
+          wait "$pid"; exit $?
+
+  # The suite runs against examples/configs by pointing an environment variable at it. This
+  # proves the other half: that a fresh checkout with no configuration becomes a working
+  # installation with one copy, reading `configs/` with no variable set. It is the first thing
+  # every new user does, and nothing else covers it.
+  install-from-scratch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0
+        with:
+          locked: true
+      - name: a clean checkout ships no config library
+        run: test ! -d configs
+      - name: the documented install resolves a study
+        run: |
+          cp -r examples/configs configs
+          pixi run python -c "
+          from prospector.config import list_studies, load_study, resolve_study
+          from prospector.spacecraft.propulsion import load_engines
+          assert load_engines(), 'no engines resolved from the copied library'
+          rc = resolve_study(load_study(sorted(list_studies())[0]))
+          print(f'study resolves: {rc.dv_budget:.2f} km/s screening budget')"

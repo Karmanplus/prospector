@@ -1,0 +1,18 @@
+name: Example bus
+# A mid-sized solar-electric bus mounting two of the mid example thrusters. Sized so the shipped
+# example both builds and closes: 119 kg of payload capacity left over, and a 6.3 km/s cruise
+# budget against the ~4.1 km/s the example target needs.
+#
+# solar_power_W and area_m2 are left at zero on purpose: the array is sized from array_margin_pct
+# and the engine load when the study resolves, so a number typed here would only go stale the
+# first time a thruster is added.
+dry_mass: 500.0
+fuel_mass: 400.0
+unusable_prop: 10.0
+engines:
+- type: thruster-mid
+  count: 2
+solar_power_W: 0.0
+area_m2: 0.0
+propellant: null
+array_margin_pct: 0.0

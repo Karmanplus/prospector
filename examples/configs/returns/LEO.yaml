@@ -1,0 +1,7 @@
+name: Low Earth orbit (propulsive capture)
+# Propulsive capture from a hyperbolic Earth arrival down to LEO is ~3.5-4 km/s -- brutal
+# for a low-thrust stack and screening-grade only here (aerocapture, which would slash it,
+# is NOT modeled). Treat a "closes to LEO" verdict as optimistic; MONTE arbitrates.
+arrival_vinf_kms: 0.2
+insertion_dv_kms: 3.8
+description: Low Earth orbit -- propulsive capture (no aerocapture modeled; expensive).

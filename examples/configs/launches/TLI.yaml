@@ -1,0 +1,4 @@
+name: Trans-lunar injection (lunar-assisted escape)
+# The launch vehicle plus a lunar gravity assist deliver the spacecraft to escape (C3 ~ 0+), so
+# there is no closed drop-off orbit and the SEP system spends nothing leaving Earth.
+escape_provided: true

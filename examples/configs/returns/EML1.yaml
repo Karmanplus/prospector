@@ -1,0 +1,6 @@
+name: Earth-Moon L1 (near-side staging)
+# EML1 sits deeper in the lunar well than EML2, so its libration-orbit capture costs
+# modestly more for an equivalent approach.
+arrival_vinf_kms: 0.4
+insertion_dv_kms: 0.8
+description: Earth-Moon L1 -- near-side cislunar staging point.

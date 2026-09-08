@@ -1,0 +1,29 @@
+# AP8-MIN inner-proton belt (solar minimum), 212 um multi-layer coverglass, GaAs/Ge single-junction cell.
+# The conservative default: AP8-MIN is the worst case for a low circular SSO (solar-minimum
+# trapped-proton fluxes are highest at low altitude -- less atmospheric scrubbing), and a
+# spiral that must climb THROUGH the inner belt for hundreds of revolutions takes the most
+# dose. Sizing the arrays against this errs large, the safe direction.
+name: AP8-MIN worst case
+cell: GaAs/Ge single-junction (NRL DDD)
+
+re_km: 6371.0
+proton_plateau_l: [1.6, 2.7]
+proton_shoulder_l: 0.12
+electron_peak_l: 4.5
+electron_sigma_l: 0.9
+bb0_scale: 2.0
+belt_floor_lo_km: 1000.0
+belt_floor_hi_km: 2500.0
+
+proton_ddd_core: 4.6e9
+electron_ddd_core: 5.8e6
+
+cell_ddd_ref: 1.1e9
+cell_ddd_coef: 0.2904
+
+coverglass_um: 212.5
+coverglass_density_g_cm3: 1.640
+coverglass_ref_um: 75.0
+coverglass_ref_density_g_cm3: 1.9866
+proton_shield_exponent: 1.25
+electron_shield_exponent: 0.3

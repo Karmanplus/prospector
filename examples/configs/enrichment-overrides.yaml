@@ -1,0 +1,37 @@
+# Hand-entered physical properties that outrank every published catalogue.
+#
+# Optional -- an installation with nothing to correct can delete this file entirely, and the
+# tool reads every property from the catalogues instead.
+#
+# Use it for a body where the published catalogues are wrong, disagree, or lag a
+# determination you have made yourself. Every value set here is treated as the preferred
+# measurement, so it wins against the surveys without argument. That is why the file should
+# stay short: each entry is an assertion that you know better than the literature.
+#
+# Recognised keys per body:
+#
+#   abs_mag    absolute magnitude H (mag)
+#   albedo     geometric albedo, 0-1 -- the single biggest lever on the derived diameter
+#   taxonomy   spectral class ("C", "Cb", "X"); only the leading letter drives the models
+#   period_h   rotation period (hours)
+#   tier       replaces the COMPUTED mission tier outright, for a body whose tier rests on a
+#              judgement the model does not capture. One of S, A, B, C, D.
+#
+# Anything else is ignored, so a note key costs nothing -- but a typo in one of the names
+# above is silently inert, which is worth knowing when an override appears to do nothing.
+#
+# Keys are the designation the screen uses (the SBDB `pdes`), quoted because most of them
+# contain a space.
+
+# The examples below are commented out; they are here to show the format, not to assert
+# anything about these bodies.
+
+# "2008 EV5":
+#   taxonomy: C
+#   albedo: 0.12
+
+# "1998 KG3":
+#   period_h: 13.335
+
+# "2010 AB78":
+#   tier: A

@@ -1,0 +1,6 @@
+name: Earth-Moon L2 (cislunar gateway)
+# Halo-orbit insertion at the Earth-Moon L2 libration point from a high-energy lunar
+# approach: ~0.6-0.8 km/s capture in the lunar-libration literature (Folta et al.).
+arrival_vinf_kms: 0.4
+insertion_dv_kms: 0.7
+description: Earth-Moon L2 -- the canonical cislunar gateway / depot point.
