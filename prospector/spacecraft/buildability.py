@@ -546,6 +546,7 @@ def assess(*, dry_kg: float, prop_kg: float, n_engines: int,
            propellant_density_kg_m3: float | None = None,
            margin_pct: float | None = None,
            thruster_chain_eff: float | None = None,
+           bol_power_W: float | None = None,
            model: BusModel | None = None) -> dict:
     """Size the vehicle the configurator's way and report whether it fits ``dry_kg``.
 
@@ -590,8 +591,10 @@ def assess(*, dry_kg: float, prop_kg: float, n_engines: int,
     # transmission loss only; radiation damage is something the flight produces rather than
     # something sized against (see required_bol_W). The spiral's time in the belts still feeds in
     # below, but only to report eol_factor, not to make the array bigger.
-    bol = required_bol_W(n_engines, engine_power_W, m, margin_pct=margin_pct,
-                         thruster_chain_eff=thruster_chain_eff)
+    # A stated array (``bol_power_W``) is weighed as given rather than sized.
+    bol = (float(bol_power_W) if bol_power_W else
+           required_bol_W(n_engines, engine_power_W, m, margin_pct=margin_pct,
+                          thruster_chain_eff=thruster_chain_eff))
     # The mass curve is a catalogue curve, so it is read at the rated (datasheet) wattage the
     # operating power implies (array_rated_W), not at the operating power itself.
     array_kg = m.array_model().mass_kg(array_rated_W(bol, m))
@@ -681,7 +684,8 @@ def assess_engine(*, dry_kg: float, prop_kg: float, n_engines: int, engine,
                   ignitions: float | None = None,
                   propellants: dict | None = None,
                   margin_pct: float | None = None,
-                  model: BusModel | None = None) -> dict:
+                  model: BusModel | None = None,
+                  bol_power_W: float | None = None) -> dict:
     """:func:`assess` fed from an engine-library :class:`~prospector.spacecraft.propulsion.Engine`.
 
     By convention the library's ``mass_kg`` is the full propulsion system per unit and
@@ -706,7 +710,7 @@ def assess_engine(*, dry_kg: float, prop_kg: float, n_engines: int, engine,
                   propellant_name=(prop.name if prop else None),
                   propellant_cost_per_kg=(prop.cost_per_kg if prop else None),
                   propellant_density_kg_m3=_storage_density_kg_m3(prop, m),
-                  margin_pct=margin_pct, model=m)
+                  margin_pct=margin_pct, model=m, bol_power_W=bol_power_W)
 
 
 def _resolve_propellant(key, propellants: dict | None):

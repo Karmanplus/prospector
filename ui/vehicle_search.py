@@ -33,6 +33,11 @@ def search_root() -> Path:
     """Where design-search sessions live. Resolved on each call, like the job channels, so a
     redirected run root (the test suite) moves this too."""
     return paths.RUNS_DIR / "vehicle_search"
+
+
+def example_root() -> Path:
+    """Sweeps shipped with the example library. Listed like the user's own, never written to."""
+    return paths.EXAMPLE_RUNS_DIR / "vehicle_search"
 # The search is launched as a module, not a script path, so this layer depends on the library's CLI
 # contract rather than on a file's location on disk.
 SEARCH_MODULE = "prospector.trades.design_search"
@@ -86,10 +91,18 @@ def _session_time(name: str) -> datetime | None:
 def list_sessions() -> list[dict]:
     """The dated search sessions, newest first: name, a readable launch time, state, target,
     and the session metadata. Sessions whose directory name isn't a timestamp are skipped."""
-    if not search_root().is_dir():
-        return []
     sessions = []
-    for d in sorted(search_root().iterdir()):
+    roots = [(search_root(), False), (example_root(), True)]
+    for root, example in roots:
+        if root.is_dir():
+            sessions.extend(_sessions_in(root, example))
+    sessions.sort(key=lambda s: s["stamp"], reverse=True)
+    return sessions
+
+
+def _sessions_in(root: Path, example: bool) -> list[dict]:
+    sessions = []
+    for d in sorted(root.iterdir()):
         if not d.is_dir() or d.name == "spiral_cache":
             continue
         when = _session_time(d.name)
@@ -104,8 +117,7 @@ def list_sessions() -> list[dict]:
         sessions.append({"name": d.name, "dir": d, "when": when.strftime("%m/%d/%y %H:%M"),
                          "stamp": when, "state": session_state(d, status),
                          "message": (status or {}).get("message", ""),
-                         "target": meta.get("target"), "meta": meta})
-    sessions.sort(key=lambda s: s["stamp"], reverse=True)
+                         "target": meta.get("target"), "meta": meta, "example": example})
     return sessions
 
 
@@ -337,8 +349,14 @@ def session_label(s: dict) -> str:
         engine = meta.get("engine")
         if engine and meta.get("engines"):
             engine = f"{engine} ×{'/'.join(str(int(n)) for n in meta['engines'])}"
-    return "  ·  ".join(filter(None, [
-        _STATE_TAG.get(s["state"], s["state"]), s.get("target"), engine]))
+    return "  ·  ".join(filter(None, [state_tag(s), s.get("target"), engine]))
+
+
+def state_tag(s: dict) -> str:
+    """The state as shown; a shipped example reads as such rather than as a run of the user's."""
+    if s.get("example") and s["state"] == "done":
+        return "✓ example"
+    return _STATE_TAG.get(s["state"], s["state"])
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +387,7 @@ _SETUP_FIELDS = (
     ("prop", "prop_range_kg", _fmt_range),
     ("max wet", "max_wet_kg", lambda v: f"{float(v):g} kg"),
     ("thrust", "duty", lambda v: f"{float(v) * 100:.0f}%"),
+    ("array", "array_W", lambda v: f"{float(v) / 1000:.1f} kW stated"),
     ("swept", "sweep_axes", _fmt_axes),
 )
 

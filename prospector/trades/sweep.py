@@ -180,6 +180,9 @@ def run_sweep(config: dict, target: dict, *, vinf_values, curve: dict | None,
     # cruise solve; each point solves the return (when planned) with these.
     return_opts = opts.pop("return_options", None)
     values = [float(x) for x in vinf_values]
+    if rc.launch.escape_provided:
+        # The launcher sets the departure speed; there is nothing to sweep.
+        values = [float(rc.departure_vinf_kms)]
     workers = max(1, min(int(workers), len(values)))
 
     if workers == 1:
@@ -509,14 +512,15 @@ def _maybe_float(value) -> float | None:
 def _vinf_dep_used(sol) -> float | None:
     """How much of its allowed departure speed the optimizer spent (km/s).
 
-    Read straight off the solution vector's departure velocity components, in m/s, with no need to
-    look up where anything is. Which part of the vector to read is taken from the solver module
-    rather than written out here: it sits between the final mass and the arrival velocity, so an
-    offset that drifted would keep returning a plausible speed built from the wrong numbers.
-    Returns None if the solution carries no vector it recognises.
+    A solved block states it (``vinf_dep_kms``, computed from the trajectory, so it is right for
+    a two-leg vector too). Otherwise it is read off a single-leg solution vector's departure
+    velocity components, in m/s, at the offset the solver module names. Returns None if the
+    solution carries neither.
     """
     from prospector.solvers.simsflanagan import _I_VINF_DEP
 
+    if isinstance(sol, dict) and sol.get("vinf_dep_kms") is not None:
+        return float(sol["vinf_dep_kms"])
     try:
         vec = sol["decision_vector"] if isinstance(sol, dict) else sol.decision_vector
         z = np.asarray(vec, float)

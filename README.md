@@ -69,11 +69,12 @@ Engines, launch types, propellants, missions, vehicles, studies and sizing coeff
 `configs/` as YAML, read at run time. Git does not track that directory; it is yours, and it never
 travels back with the code. Skip the copy and the app says so and prints the command.
 
-`examples/configs` is the template you copied from: three synthetic thrusters with one mission,
-vehicle and study that build and fly, plus three flown missions, Dawn, Psyche and Hayabusa2, with
-their real engines and masses from public sources, so you can check the tool against history
-([`docs/validation.md`](docs/validation.md)). Every file is annotated with what its numbers mean
-and which are placeholders. Set `PROSPECTOR_CONFIG_DIR` to keep the library elsewhere.
+`examples/configs` is the template you copied from: four flown missions, Dawn, Psyche, Hayabusa2
+and DART, with their real engines and masses from public sources, so you can check the tool
+against history ([`docs/validation.md`](docs/validation.md)). Every file is annotated with what
+its numbers mean and which are placeholders. Set `PROSPECTOR_CONFIG_DIR` to keep the library
+elsewhere. The Dawn study also ships with a finished vehicle sweep (`examples/runs`), so Compare
+vehicles has something to show before you have run one.
 
 <details>
 <summary><strong>Sharing a library with your team</strong></summary>

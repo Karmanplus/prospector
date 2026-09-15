@@ -4,7 +4,7 @@ __pycache__/
 .venv/
 venv/
 .pixi/
-runs/
+/runs/
 artifacts/
 data/
 # The working config library: this installation's own engines, missions, vehicles, studies and
@@ -16,6 +16,7 @@ data/
 # that name at ANY depth, which silently swallows examples/configs -- the template that has to
 # ship -- and the only symptom is a recipient with nothing to copy.
 /configs/
+# `runs/` is anchored for the same reason: examples/runs ships a finished sweep.
 # And the singular spelling. A config library named `config/` is the same operator data
 # under a different name, and it has been committed by accident once already.
 /config/

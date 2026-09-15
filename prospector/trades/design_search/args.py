@@ -56,6 +56,11 @@ def parse_args(argv=None):
     p.add_argument("--prop-step", type=float, default=100.0,
                    help="propellant axis resolution (kg)")
     p.add_argument("--max-wet", type=float, default=750.0)
+    p.add_argument("--array-W", type=float, default=None, dest="array_W",
+                   help="hold every design at this stated array power (W) instead of sizing "
+                        "one to its thrusters; the app passes the study vehicle's figure")
+    p.add_argument("--array-m2", type=float, default=None, dest="array_m2",
+                   help="drag area (m^2) that goes with --array-W")
     # The cruise runs at its own on-time limit, as it does in the app (default: none). One
     # --duty used to throttle both the spiral and the cruise to 90%, which the app never does.
     p.add_argument("--cruise-duty", type=float, default=1.0, dest="cruise_duty",

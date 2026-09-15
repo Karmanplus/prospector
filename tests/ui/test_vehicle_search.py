@@ -195,3 +195,29 @@ def test_rows_rank_by_fuel_margin_not_dv_margin():
         "wet_kg": [650.0, 650.0], "margin_kms": [0.9, 0.3], "prop_margin_kg": [2.0, 9.0],
     })
     assert vs.order(df)["slug"].tolist() == ["b", "a"]
+
+
+def test_shipped_example_sweeps_are_listed_read_only(tmp_path, monkeypatch):
+    """A sweep under examples/runs lists beside the user's own, tagged as the example it is, and
+    is filed under its study like any other."""
+    import json
+
+    from prospector import paths
+    monkeypatch.setattr(paths, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(paths, "EXAMPLE_RUNS_DIR", tmp_path / "examples")
+    for root, name, study in ((tmp_path / "runs", "20300101-120000", "mine"),
+                              (tmp_path / "examples", "20260915-110000", "dawn")):
+        d = root / "vehicle_search" / name
+        d.mkdir(parents=True)
+        (d / "session.json").write_text(json.dumps({"study": study, "target": "4 Vesta"}))
+        (d / "status.json").write_text('{"state": "done", "n_evaluated": 2}')
+        (d / "combos.csv").write_text("dry_kg,prop_kg\n700,400\n")
+    sessions = vs.list_sessions()
+    assert [(s["name"], s["example"]) for s in sessions] == [
+        ("20300101-120000", False), ("20260915-110000", True)]
+    example = sessions[1]
+    assert vs.state_tag(example) == "✓ example" and vs.state_tag(sessions[0]) == "✓ done"
+    assert vs.sessions_for_project(sessions, "dawn", None, None) == [example]
+    # Nothing writes there: the listing leaves the example tree as it found it.
+    assert sorted(p.name for p in example["dir"].iterdir()) == [
+        "combos.csv", "session.json", "status.json"]

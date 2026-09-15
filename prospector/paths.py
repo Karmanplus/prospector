@@ -34,6 +34,10 @@ BUNDLED_CONFIG_DIR = REPO_ROOT / "configs"
 # against, so a test cannot come to depend on data that is not in the repository.
 EXAMPLE_CONFIG_DIR = REPO_ROOT / "examples" / "configs"
 
+# Finished runs that ship with the example library (a vehicle sweep for a flown mission), so a
+# fresh install has something to click through before it has solved anything. Read-only.
+EXAMPLE_RUNS_DIR = REPO_ROOT / "examples" / "runs"
+
 
 def config_name(name: str) -> str:
     """Check that a config name is one file name inside its kind's directory, never a path.

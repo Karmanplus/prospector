@@ -295,3 +295,25 @@ def test_an_unsettled_point_does_not_close(monkeypatch):
     out = _combo(rc, monkeypatch, [_point(total_dv_kms=rc.total_dv_capability - 0.5,
                                           propellant_kg=usable - 5.0, settled=True)])
     assert out["success"] is True
+
+
+def test_a_stated_array_is_kept_on_every_design():
+    """The study vehicle's array is a hardware number: a design search on it flies that array
+    and weighs it as given, instead of sizing a smaller one to each design's thrusters."""
+    from prospector.spacecraft import buildability
+
+    mission = load_mission(lib.mission_key()).model_copy(update={"launch_orbit": "ESCAPE"})
+    catalog = load_engines()
+    sized, _ = ev.build_config(mission, catalog, {"ESCAPE": _config().launch}, dry_kg=700,
+                               prop_kg=400, n_engines=1, engine_key=lib.engine_key())
+    stated, _ = ev.build_config(mission, catalog, {"ESCAPE": _config().launch}, dry_kg=700,
+                                prop_kg=400, n_engines=1, engine_key=lib.engine_key(),
+                                array=(10300.0, 0.0))
+    assert stated.vehicle.solar_power_W == 10300.0
+    assert sized.vehicle.solar_power_W < 10300.0
+    engine = catalog[lib.engine_key()]
+    build = buildability.assess_engine(dry_kg=700, prop_kg=400, n_engines=1, engine=engine,
+                                       bol_power_W=10300.0)
+    assert build["bol_power_W"] == 10300.0
+    assert build["array_kg"] > buildability.assess_engine(
+        dry_kg=700, prop_kg=400, n_engines=1, engine=engine)["array_kg"]

@@ -33,7 +33,8 @@ from prospector.trades.design_search.session import SPIRAL_CACHE_DIR
 
 def build_config(mission, catalog, launches, *, dry_kg: float, prop_kg: float,
                  n_engines: int, engine_key: str, propellant_key: str = "xenon",
-                 propellants: dict | None = None) -> tuple[ResolvedConfig, bool]:
+                 propellants: dict | None = None,
+                 array: tuple[float, float] | None = None) -> tuple[ResolvedConfig, bool]:
     """One candidate vehicle on the fixed mission, fully resolved, running a chosen gas.
 
     Returns ``(config, estimated)``. The engine is moved onto ``propellant_key`` by
@@ -41,7 +42,8 @@ def build_config(mission, catalog, launches, *, dry_kg: float, prop_kg: float,
     when the engine already names that gas and otherwise estimates them by scaling its xenon
     figures. The scaled engine goes into the catalog, so the resolved config's Isp, thrust and
     power all reflect the gas, and so do the spiral, sweep and buildability built on them.
-    ``estimated`` comes back so the result can say which it was.
+    ``estimated`` comes back so the result can say which it was. ``array`` is a stated
+    ``(power_W, area_m2)`` kept on the vehicle; None sizes one to the engines.
     """
     from prospector.spacecraft.propellants import engine_on_propellant, load_propellants
 
@@ -53,6 +55,7 @@ def build_config(mission, catalog, launches, *, dry_kg: float, prop_kg: float,
         name=f"search {dry_kg:.0f}/{prop_kg:.0f} x{n_engines} {propellant_key}",
         dry_mass=float(dry_kg), fuel_mass=float(prop_kg), unusable_prop=0.0,
         engines=[EngineMount(type=engine_key, count=int(n_engines))],
+        **({"solar_power_W": float(array[0]), "area_m2": float(array[1])} if array else {}),
     )
     rc = ResolvedConfig.build(mission, vehicle, Screening(dv_margin_factor=1.0),
                               catalog, launches=launches)
@@ -366,7 +369,8 @@ def evaluate_one(mission, catalog, launches, target: dict, *, engine_key: str,
                  run_buildability: bool, sweep_workers: int,
                  propellant_key: str = "xenon",
                  model_overrides: dict | None = None,
-                 spiral_options: dict | None = None) -> dict:
+                 spiral_options: dict | None = None,
+                 array: tuple[float, float] | None = None) -> dict:
     """One combination through the whole pipeline. Holds no session state, so it can run in a
     child process when combinations are spread across cores.
 
@@ -384,7 +388,8 @@ def evaluate_one(mission, catalog, launches, target: dict, *, engine_key: str,
     propellants = load_propellants()
     rc, estimated = build_config(mission, catalog, launches, dry_kg=dry, prop_kg=prop,
                                  n_engines=n_eng, engine_key=engine_key,
-                                 propellant_key=propellant_key, propellants=propellants)
+                                 propellant_key=propellant_key, propellants=propellants,
+                                 array=array)
     bus_model = buildability.apply_model_overrides(rc.bus_model(),
                                                    model_overrides or {})
     prop_name = (propellants[propellant_key].name if propellant_key in propellants
@@ -398,10 +403,12 @@ def evaluate_one(mission, catalog, launches, target: dict, *, engine_key: str,
     build = None
     if run_buildability:
         engine = rc.engines[engine_key]
+        stated_W = array[0] if array else None
         build = buildability.assess_engine(
             dry_kg=dry, prop_kg=prop, n_engines=n_eng, engine=engine,
             belt_days=curve.get("belt_days"), eol_power_fraction=curve.get("power_fraction_end"),
-            ignitions=curve.get("revolutions"), propellants=propellants, model=bus_model)
+            ignitions=curve.get("revolutions"), propellants=propellants, model=bus_model,
+            bol_power_W=stated_W)
         if curve.get("status") == "escaped" and build["bol_power_W"] > 0:
             # Pass 2 closes the power loop: the sized array degrades through the belts and powers
             # the thrusters through the conversion chain their PPU wiring implies, so the escape
@@ -415,7 +422,8 @@ def evaluate_one(mission, catalog, launches, target: dict, *, engine_key: str,
                 dry_kg=dry, prop_kg=prop, n_engines=n_eng, engine=engine,
                 belt_days=curve.get("belt_days"),
                 eol_power_fraction=curve.get("power_fraction_end"),
-                ignitions=curve.get("revolutions"), propellants=propellants, model=bus_model)
+                ignitions=curve.get("revolutions"), propellants=propellants, model=bus_model,
+                bol_power_W=stated_W)
     verdict = {"dry_kg": dry, "prop_kg": prop, "wet_kg": dry + prop,
                "prop_dry_ratio": round(prop / dry, 4),
                "n_engines": n_eng, "engine": engine_key,

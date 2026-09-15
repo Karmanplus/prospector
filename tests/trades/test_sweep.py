@@ -554,3 +554,37 @@ def test_worker_grid_reports_a_failure_without_losing_the_job(tmp_path, monkeypa
     status = jobs.read_grid_status(run_id)
     assert status["state"] == jobs.ERROR
     assert status["error"] and "Traceback" in status["error"]
+
+
+def test_run_sweep_flies_the_launchers_speed_when_it_provides_the_escape(monkeypatch):
+    """With the escape bought from the launcher the departure speed is the mission's, so the
+    sweep's speed axis collapses to that one point instead of pinning the cruise to 0 km/s."""
+    esc = LaunchOrbit(name="ESCAPE", escape_provided=True)
+    cat = {"E": Engine(name="E", isp_s=2000, thrust_mN=500, power_W=1000)}
+    mission = Mission(launch_orbit="ESCAPE", launch_window=WINDOW, arrive_by=date(2030, 6, 1),
+                      departure_vinf_kms=3.3)
+    rc = ResolvedConfig.build(mission, Vehicle(name="v", dry_mass=300, fuel_mass=350,
+                                               engines=[EngineMount(type="E")]),
+                              Screening(), cat, launches={"ESCAPE": esc})
+    caps = []
+
+    def fake_solve(rc_point, target_row, **kwargs):
+        caps.append(kwargs["sf_options"]["vinf_dep_kms"])
+        return _fake_result(rc_point)
+
+    monkeypatch.setattr(sweep, "_evaluate_candidate", fake_solve)
+    points = sweep.run_sweep(rc.model_dump(mode="json"), _TARGET, vinf_values=[0.0, 1.0],
+                             curve=None)
+    assert caps == [3.3]
+    assert [p["vinf_kms"] for p in points] == [3.3]
+    assert points[0]["escape_dv_kms"] == 0.0
+
+
+def test_departure_speed_used_is_read_from_the_block_not_the_vector_layout():
+    """A flyby block's vector is laid out differently from a single leg's, so slicing it at the
+    single-leg offset returned a made-up speed; the block's own figure wins when present."""
+    from prospector.solvers.simsflanagan import _I_VINF_DEP
+    z = np.zeros(24)
+    z[_I_VINF_DEP] = [1000.0, 0.0, 0.0]
+    assert sweep._vinf_dep_used({"decision_vector": z}) == pytest.approx(1.0)
+    assert sweep._vinf_dep_used({"decision_vector": z, "vinf_dep_kms": 3.3}) == 3.3

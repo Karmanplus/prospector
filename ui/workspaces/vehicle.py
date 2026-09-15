@@ -853,7 +853,7 @@ def _launcher(on_started: Callable[[], None] | None = None) -> None:
                 "--radiation-model", str(S.launch_radiation_model),
                 "--coverglass-um", str(float(S.launch_coverglass_um)),
                 "--coverglass-density", str(float(S.launch_coverglass_density)),
-                *sweep_args]
+                *_stated_array_args(), *sweep_args]
         global _session, _was_running
         _session = vs.submit_search(args)
         _was_running = True
@@ -1052,7 +1052,7 @@ def _sessions_panel() -> None:
     for s in sessions:
         status = vs.read_json(s["dir"] / "status.json") or {}
         rows.append({"name": s["name"], "when": s["when"],
-                     "state": vs._STATE_TAG.get(s["state"], s["state"]),
+                     "state": vs.state_tag(s),
                      "state_clr": _STATE_COLOR.get(s["state"], MUTED),
                      "target": s.get("target") or "-", "engine": _engine_short(s.get("meta") or {}),
                      "setup": setup["rows"].get(s["name"]) or "—",
@@ -1265,6 +1265,15 @@ def _open_in_flight(rec: dict, session: dict) -> None:
     from ui import topbar
     topbar.header.refresh()
     topbar.main_body.refresh()
+
+
+def _stated_array_args() -> list[str]:
+    """The study vehicle's stated array, held on every swept design as the project page holds
+    it. Nothing when the app sizes the array."""
+    stated = state.stated_array()
+    if not stated:
+        return []
+    return ["--array-W", str(stated[0]), *(["--array-m2", str(stated[1])] if stated[1] else [])]
 
 
 def _clear_selection() -> None:

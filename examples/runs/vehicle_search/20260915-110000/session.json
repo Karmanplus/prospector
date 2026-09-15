@@ -1,0 +1,41 @@
+{
+  "target": "4 Vesta (A807 FA)",
+  "pdes": "4",
+  "mission": "dawn-to-vesta",
+  "study": "dawn",
+  "engine": "nstar",
+  "pairs": [
+    [
+      "nstar",
+      1
+    ],
+    [
+      "nstar",
+      2
+    ]
+  ],
+  "engines": [
+    1,
+    2
+  ],
+  "propellants": [
+    "xenon"
+  ],
+  "prop_range_kg": [
+    300.0,
+    500.0,
+    50.0
+  ],
+  "dry_range_kg": [
+    650.0,
+    850.0,
+    50.0
+  ],
+  "max_wet_kg": 1400.0,
+  "duty": 0.9,
+  "vinf_kms": [
+    3.3
+  ],
+  "array_W": 10300.0,
+  "sweep_axes": {}
+}

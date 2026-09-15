@@ -81,7 +81,13 @@ class Search:
                       else parse_pairs([f"{args.engine}:" +
                                         ",".join(str(n) for n in args.engines)],
                                        self.catalog))
-        self.vinf_values = [float(v) for v in args.vinf]
+        launch = self.launches[self.mission.launch_orbit]
+        self.vinf_values = ([float(self.mission.departure_vinf_kms or 0.0)]
+                            if launch.escape_provided else [float(v) for v in args.vinf])
+        # A stated array (the study vehicle's hardware number) is kept on every design, as the
+        # project page keeps it; without one each design gets an array sized to its thrusters.
+        self.array = ((float(args.array_W), float(args.array_m2 or 0.0))
+                      if getattr(args, "array_W", None) else None)
         # The working gases every pairing is evaluated under; validated against the propellant
         # library so an unknown gas fails fast rather than silently estimating.
         prop_catalog = load_propellants()
@@ -140,7 +146,8 @@ class Search:
             "prop_range_kg": [args.prop_min, args.prop_max, args.prop_step],
             "dry_range_kg": [args.dry_min, args.dry_max, args.dry_step],
             "max_wet_kg": args.max_wet, "duty": args.duty,
-            "vinf_kms": list(args.vinf),
+            "vinf_kms": list(self.vinf_values),
+            "array_W": (self.array[0] if self.array else None),
             # The swept model axes (key -> values), so the app can label the param_* columns and
             # recover what this session varied without re-parsing the flag.
             "sweep_axes": self.model_axes,
@@ -166,7 +173,7 @@ class Search:
         rc, _est = build_config(self.mission, self.catalog, self.launches,
                                 dry_kg=dry, prop_kg=prop, n_engines=n_eng,
                                 engine_key=engine_key or self.pairs[0][0],
-                                propellant_key=propellant_key)
+                                propellant_key=propellant_key, array=self.array)
         return rc
 
     def evaluate(self, dry: float, prop: float, n_eng: int, engine_key: str,
@@ -199,7 +206,8 @@ class Search:
                   spiral_options=dict(self.spiral_options),
                   retries=self.args.retries,
                   run_buildability=self.args.buildability,
-                  sweep_workers=self.sweep_workers, model_overrides=model_overrides)
+                  sweep_workers=self.sweep_workers, model_overrides=model_overrides,
+                  array=self.array)
         if self.pool is not None:
             verdict = self.pool.submit(
                 _combo_job, {"mission": self.args.mission, "target": self.target,

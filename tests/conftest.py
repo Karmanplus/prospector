@@ -142,6 +142,9 @@ def isolate_runs(tmp_path_factory, monkeypatch):
     the floor under them, not a replacement.
     """
     monkeypatch.setattr(paths, "RUNS_DIR", tmp_path_factory.mktemp("runs"))
+    # The shipped example sweep (examples/runs) would otherwise list itself under the example
+    # study in every test that opens it.
+    monkeypatch.setattr(paths, "EXAMPLE_RUNS_DIR", tmp_path_factory.mktemp("example-runs"))
 
 
 @pytest.fixture(autouse=True)
