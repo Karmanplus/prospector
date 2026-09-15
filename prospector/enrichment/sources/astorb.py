@@ -158,14 +158,72 @@ def lookup(identifier: str) -> dict[str, list[Measurement]]:
 
     bodies = (payload.get("data") or {}).get("minorplanet") or []
     result = _survey_measurements(bodies[0].get("surveydata") if bodies else None)
+    _write_cache(identifier, result)
+    return result
 
+
+# Ids per query. The server unions numbers and designations in one request; a few hundred keeps
+# the response well under the timeout.
+_CHUNK = 200
+
+
+def lookup_many(identifiers: list[str]) -> dict[str, dict[str, list[Measurement]]]:
+    """:func:`lookup` for a list: cached bodies from disk, the rest in queries of ``_CHUNK`` ids.
+
+    Every id gets an entry. A body the database does not know comes back empty and is cached as
+    such; a failed query leaves its ids empty and uncached, so a later run asks again.
+    """
+    out: dict[str, dict[str, list[Measurement]]] = {}
+    todo: list[str] = []
+    for identifier in dict.fromkeys(str(x).strip() for x in identifiers):
+        if not identifier:
+            continue
+        path = _cache_path(identifier)
+        if path.is_file():
+            try:
+                out[identifier] = _as_measurements(json.loads(path.read_text()))
+                continue
+            except Exception:
+                pass    # unreadable cache entry: refetch this one
+        todo.append(identifier)
+
+    for start in range(0, len(todo), _CHUNK):
+        chunk = todo[start:start + _CHUNK]
+        numbers = [int(i) for i in chunk if re.fullmatch(r"\d+", i)]
+        designations = [i for i in chunk if not re.fullmatch(r"\d+", i)]
+        try:
+            payload = _post(_TARGET_QUERY, {"designations": designations, "numbers": numbers},
+                            _TARGET_TIMEOUT_S)
+        except Exception:
+            for identifier in chunk:
+                out[identifier] = _empty()
+            continue
+        by_number: dict[int, dict] = {}
+        by_name: dict[str, dict] = {}
+        for body in (payload.get("data") or {}).get("minorplanet") or []:
+            measurements = _survey_measurements(body.get("surveydata"))
+            if body.get("ast_number") is not None:
+                by_number[int(body["ast_number"])] = measurements
+            name = (body.get("designameByIdDesignationPrimary") or {}).get("str_designame")
+            if name:
+                by_name[str(name).strip()] = measurements
+        for identifier in chunk:
+            hit = (by_number.get(int(identifier)) if re.fullmatch(r"\d+", identifier)
+                   else by_name.get(identifier))
+            result = hit if hit is not None else _empty()
+            _write_cache(identifier, result)
+            out[identifier] = result
+    return out
+
+
+def _write_cache(identifier: str, result: dict[str, list[Measurement]]) -> None:
+    path = _cache_path(identifier)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(
             {name: [m.value for m in result[name]] for name in PROPERTIES}))
     except Exception:
         pass        # caching is best-effort; never fail a lookup over it
-    return result
 
 
 def spin_catalog(refresh: bool = False) -> tuple[list[float], list[float]]:

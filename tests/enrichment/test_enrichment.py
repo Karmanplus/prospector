@@ -66,27 +66,48 @@ def _kept(df, des):
     return list(df.loc[apply_selection(df, des)["selected"], "input_id"])
 
 
-def test_default_keeps_all():
+def test_default_lists_the_characterized_rows_only():
     df = _enriched()
-    assert _kept(df, Desirability()) == ["S1", "B1", "U1", "M1"]
+    # U1 has no tier: not characterized, so hidden until asked for.
+    assert _kept(df, Desirability()) == ["S1", "B1", "M1"]
+    assert _kept(df, Desirability(keep_unknown=True)) == ["S1", "B1", "U1", "M1"]
 
 
-def test_tier_floor_keeps_better_and_unknown():
+def test_tier_floor_keeps_better_and_only_with_the_switch_the_unknown():
     df = _enriched()
-    # min_tier A keeps S (better) and the unknown-tier row; drops B and C.
-    assert _kept(df, Desirability(min_tier="A")) == ["S1", "U1"]
+    # min_tier A keeps S (better); drops B and C; the unknown-tier row only when asked.
+    assert _kept(df, Desirability(min_tier="A")) == ["S1"]
+    assert _kept(df, Desirability(min_tier="A", keep_unknown=True)) == ["S1", "U1"]
 
 
-def test_taxonomy_include_keeps_listed_and_unknown():
+def test_taxonomy_include_keeps_listed_and_with_the_switch_the_unknown():
     df = _enriched()
-    # carbonaceous keeps the C row and the unknown-taxonomy row; drops S-complex and metallic.
-    assert _kept(df, Desirability(taxonomy_include=["C", "B", "D"])) == ["S1", "U1"]
+    # carbonaceous keeps the C row; drops S-complex and metallic; the unknown one only when asked.
+    assert _kept(df, Desirability(taxonomy_include=["C", "B", "D"])) == ["S1"]
+    assert _kept(df, Desirability(taxonomy_include=["C", "B", "D"], keep_unknown=True)) == ["S1", "U1"]
 
 
-def test_period_and_diameter_floors_keep_unknown():
+def test_period_and_diameter_floors_never_drop_for_missing_data_when_kept():
     df = _enriched()
-    assert _kept(df, Desirability(min_period_h=2.0)) == ["S1", "B1", "U1"]   # fast rotator M1 dropped
-    assert _kept(df, Desirability(min_diameter_m=350)) == ["S1", "U1", "M1"]  # 340 m B1 dropped
+    keep = dict(keep_unknown=True)
+    assert _kept(df, Desirability(min_period_h=2.0, **keep)) == ["S1", "B1", "U1"]   # fast M1 dropped
+    assert _kept(df, Desirability(min_diameter_m=350, **keep)) == ["S1", "U1", "M1"]  # 340 m B1 dropped
+    assert _kept(df, Desirability(min_diameter_m=350)) == ["S1", "M1"]
+
+
+def test_uncharacterized_is_flagged_whether_listed_or_hidden():
+    """The ``uncharacterized`` column names the rows that are not characterized or that a filter
+    could not test, in both switch positions, so the count of measured matches is always known."""
+    df = _enriched()
+    for keep in (False, True):
+        out = apply_selection(df, Desirability(min_diameter_m=350, keep_unknown=keep))
+        assert list(out.loc[out["uncharacterized"], "input_id"]) == ["U1"]
+        assert list(out.loc[out["selected"] & ~out["uncharacterized"], "input_id"]) == ["S1", "M1"]
+    # A row a known value already ruled out is not "unknown", whatever else is missing.
+    out = apply_selection(df, Desirability(min_diameter_m=350, min_period_h=100))
+    assert not bool(out.loc[out["input_id"] == "B1", "uncharacterized"].iloc[0])
+    # Nothing in force: only the uncharacterized row is unknown.
+    assert list(apply_selection(df, Desirability()).query("uncharacterized")["input_id"]) == ["U1"]
 
 
 def test_unenriched_frame_selected_equals_reachable():
@@ -113,6 +134,8 @@ def offline(monkeypatch):
     monkeypatch.setattr(backend, "_preflight", lambda: None)
     monkeypatch.setattr(backend.astorb, "spin_catalog", lambda *a, **k: ([], []))
     monkeypatch.setattr(backend.perihelion, "load_toliou_table", lambda *a, **k: None)
+    monkeypatch.setattr(backend.ssodnet, "lookup_many", lambda ids: {})
+    monkeypatch.setattr(backend.astorb, "lookup_many", lambda ids: {})
 
     known: dict[str, dict] = {}
 
@@ -121,6 +144,49 @@ def offline(monkeypatch):
 
     monkeypatch.setattr(backend, "characterize", _characterize)
     return known
+
+
+def test_backend_fetches_each_chunk_in_bulk_and_hands_the_results_on(offline, monkeypatch):
+    """The two remote lookups are made once per chunk for every id in it, and what they return
+    reaches ``characterize`` so it does not look the body up again."""
+    asked: dict[str, list] = {"ssodnet": [], "astorb": []}
+    monkeypatch.setattr(backend.ssodnet, "lookup_many",
+                        lambda ids: asked["ssodnet"].append(list(ids)) or {"A1": "body-A1"})
+    monkeypatch.setattr(backend.astorb, "lookup_many",
+                        lambda ids: asked["astorb"].append(list(ids)) or {"A1": "cat-A1"})
+    handed = {}
+
+    def _characterize(identifier, **kwargs):
+        handed[identifier] = (kwargs.get("body"), kwargs.get("catalog_data"))
+        return _row(identifier)
+
+    monkeypatch.setattr(backend, "characterize", _characterize)
+    monkeypatch.setattr(backend, "PREFETCH_CHUNK", 2)
+    backend.run(["A1", "B2", "C3"], n_workers=2)
+    assert asked["ssodnet"] == [["A1", "B2"], ["C3"]] and asked["astorb"] == asked["ssodnet"]
+    assert handed["A1"] == ("body-A1", "cat-A1") and handed["B2"] == (None, None)
+
+
+def test_a_source_outage_ends_the_run_as_a_failure_not_as_missing_software(offline, monkeypatch):
+    """The package check already passed, so a source saying it is unavailable mid-run is the
+    remote service; the run fails with that reason rather than caching thin rows or reading as
+    'not installed'."""
+    from prospector.enrichment.sources import ssodnet
+
+    def _down(ids):
+        raise ssodnet.SourceUnavailable("tables service down; try again later")
+    monkeypatch.setattr(backend.ssodnet, "lookup_many", _down)
+    offline.update({"A1": _row("A1")})
+    with pytest.raises(EnrichmentFailed, match="tables service down"):
+        backend.run(["A1"], n_workers=1)
+
+
+def test_a_failed_bulk_fetch_falls_back_to_per_body_lookups(offline, monkeypatch):
+    def _down(ids):
+        raise ConnectionError("bulk endpoint down")
+    monkeypatch.setattr(backend.ssodnet, "lookup_many", _down)
+    offline.update({"A1": _row("A1")})
+    assert list(backend.run(["A1"], n_workers=1)["input_id"]) == ["A1"]
 
 
 def _row(identifier, tier="S"):

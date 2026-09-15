@@ -134,3 +134,109 @@ def test_a_resolved_body_keeps_the_identifier_it_was_asked_for(monkeypatch):
     assert body.resolved is True
     assert body.input_id == "341843", "the join key is the input, never the resolved name"
     assert body.name == "2008 EV5" and body.number == 341843
+
+
+def _fake_rocks(tmp_path, monkeypatch, *, tables_landed=True, calls=None):
+    """A stand-in for the library: two known bodies, one unknown, and a cache directory the bulk
+    fetch writes table files into (or not, when the tables service is 'down')."""
+    import sys
+    import types
+
+    calls = calls if calls is not None else []
+    cache = tmp_path / "rocks-cache"
+    cache.mkdir()
+
+    class _Value:
+        def __init__(self, value):
+            self.value = value
+
+    class _Rock:
+        orbital_elements = None
+        albedos = taxonomies = spins = colors = None
+
+        def __init__(self, id_, ssocard=None, skip_id_check=False, datacloud=None, **_k):
+            calls.append(("Rock", id_, tuple(datacloud or ())))
+            self.id_, self.name, self.number = id_, ssocard["name"], ssocard.get("number")
+            self.H = _Value(ssocard["H"])
+
+    def identify(ids, return_id=False, **_k):
+        calls.append(("identify", list(ids)))
+        known = {"99942": ("Apophis", 99942, "Apophis"), "433": ("Eros", 433, "Eros")}
+        return [known.get(i, (None, float("nan"), None)) for i in ids]
+
+    def get_ssocard(ids, **_k):
+        calls.append(("cards", list(ids)))
+        return [{"name": i, "number": 1, "H": 19.1} for i in ids]
+
+    def get_datacloud_catalogue(ids, table, **_k):
+        calls.append(("table", table, list(ids)))
+        if tables_landed:
+            for i in ids:
+                (cache / f"{i}_{table}.json").write_text("{}")
+        return {}
+
+    tables = {n: {"ssodnet_name": t, "attr_name": n} for n, t in
+              (("albedos", "diamalbedo"), ("taxonomies", "taxonomy"), ("colors", "colors"),
+               ("spins", "spin"))}
+    fake = types.SimpleNamespace(
+        Rock=_Rock, rocks=None,
+        resolve=types.SimpleNamespace(identify=identify),
+        ssodnet=types.SimpleNamespace(get_ssocard=get_ssocard,
+                                      get_datacloud_catalogue=get_datacloud_catalogue),
+        config=types.SimpleNamespace(DATACLOUD=tables, PATH_CACHE=cache))
+    monkeypatch.setitem(sys.modules, "rocks", fake)
+    return calls
+
+
+def test_lookup_many_fetches_the_list_in_bulk_and_builds_each_body_locally(tmp_path, monkeypatch):
+    """One resolution, one card fetch and one fetch per table for the whole list; each body is
+    then built from its card with the tables that landed, never fetching per body."""
+    calls = _fake_rocks(tmp_path, monkeypatch)
+    bodies = ssodnet.lookup_many(["99942", "nonsense", "433", "99942"])
+    assert calls[0] == ("identify", ["99942", "nonsense", "433"])
+    assert calls[1] == ("cards", ["Apophis", "Eros"])
+    assert [c for c in calls if c[0] == "table"] == [
+        ("table", "diamalbedo", ["Apophis", "Eros"]), ("table", "taxonomy", ["Apophis", "Eros"]),
+        ("table", "colors", ["Apophis", "Eros"]), ("table", "spin", ["Apophis", "Eros"])]
+    assert [c for c in calls if c[0] == "Rock"] == [
+        ("Rock", "Apophis", ("albedos", "taxonomies", "colors", "spins")),
+        ("Rock", "Eros", ("albedos", "taxonomies", "colors", "spins"))]
+    assert bodies["99942"].resolved and bodies["99942"].abs_mag[0].value == 19.1
+    assert bodies["99942"].input_id == "99942"        # the join key is what was asked for
+    assert bodies["433"].resolved and not bodies["nonsense"].resolved
+
+
+def test_a_dropped_connection_is_retried_once_before_giving_up(tmp_path, monkeypatch):
+    calls = _fake_rocks(tmp_path, monkeypatch)
+    import sys
+    fake = sys.modules["rocks"]
+    real = fake.ssodnet.get_ssocard
+    state = {"n": 0}
+
+    def _flaky(ids, **k):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise ConnectionResetError("reset by peer")
+        return real(ids, **k)
+
+    fake.ssodnet.get_ssocard = _flaky
+    monkeypatch.setattr(ssodnet.time, "sleep", lambda s: None)
+    bodies = ssodnet.lookup_many(["99942"])
+    assert state["n"] == 2 and bodies["99942"].resolved
+    assert sum(1 for c in calls if c[0] == "cards") == 1
+
+
+def test_a_tables_outage_is_reported_not_cached_as_nothing_measured(tmp_path, monkeypatch):
+    _fake_rocks(tmp_path, monkeypatch, tables_landed=False)
+    with pytest.raises(ssodnet.SourceUnavailable, match="tables"):
+        ssodnet.lookup_many(["99942", "433"])
+
+
+def test_a_failed_bulk_call_returns_nothing_rather_than_guessing(tmp_path, monkeypatch):
+    calls = _fake_rocks(tmp_path, monkeypatch)
+    import sys
+
+    def _down(ids, **_k):
+        raise RuntimeError("quaero down")
+    sys.modules["rocks"].resolve.identify = _down
+    assert ssodnet.lookup_many(["99942"]) == {} and calls == []

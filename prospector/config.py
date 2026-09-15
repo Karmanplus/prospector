@@ -213,13 +213,19 @@ class Desirability(BaseModel):
 
     The second screen, independent of reachability: it narrows the targets that survived by how
     valuable they would be to mine. Every term starts permissive, either None or off, so an unset
-    filter keeps everything and a target whose property is unknown is always kept -- missing data
-    can never quietly drop a reachable target. Tightening is something the user chooses, and the
-    real solver still decides what can be flown.
+    filter keeps everything. A target not yet characterized, or one a filter in force cannot
+    test, is left out unless ``keep_unknown`` is turned on; it is never lost, only hidden, and the
+    count of such targets is always shown. Tightening is something the user chooses, and the real
+    solver still decides what can be flown.
 
     Periods are rotation periods in hours, diameters in meters, tiers ordered S (best) -> D.
     """
 
+    keep_unknown: bool = Field(
+        default=False,
+        description="Also list targets not yet characterized, or whose filtered property has no "
+                    "value (True); by default only measured matches are listed (False).",
+    )
     min_tier: Literal["S", "A", "B", "C", "D"] | None = Field(
         default=None, description="Lowest mission-target tier to keep (S best); None keeps all tiers."
     )

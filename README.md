@@ -19,15 +19,26 @@ Arriving means matching its orbit, not capturing into one around it.
 
 ## What it looks like
 
-Four workspaces: pick a target, plan the flight, compare vehicles, and edit the configuration
-everything is derived from.
+Four workspaces, shown here on the Dawn example: set up the project, find targets, compare
+vehicles, and plan the trajectory.
 
-| | |
-|---|---|
-| ![The Trajectory tab](docs/images/trajectory.png) | ![The Earth escape tab](docs/images/escape.png) |
-| A converged cruise, coloured by throttle, picked off a grid of real trajectories over departure date and flight time. | The escape spiral out of the drop-off orbit: eclipses, the Sun and Moon, drag, and the array wearing down in the radiation belts. |
-| ![The engine library](docs/images/engine-library.png) | ![Global settings](docs/images/global-settings.png) |
-| The engine library: one thruster's numbers, and a throttle curve pasted from its datasheet. | Global settings: the coefficients a project's vehicles are sized and costed from, one profile of several. |
+![Project](docs/images/project.gif)
+
+A project is a mission and a vehicle; everything else is derived.
+
+![Find targets](docs/images/targets.gif)
+
+The catalogue screened against the vehicle's budget, then narrowed by what a target is made of
+and how big it is.
+
+![Compare vehicles](docs/images/vehicles.gif)
+
+A sweep across dry mass, propellant and engine count, each design flown to the target.
+
+![Plan trajectory](docs/images/trajectory.gif)
+
+A cruise picked off the transfer grid and flown through the Mars flyby, with the mission profile
+and diagnostics behind it.
 
 ## Install
 
@@ -117,7 +128,10 @@ pixi run -e enrichment app
 
 Without it reachability and every solve are unaffected, and the panel says so. `pip install
 space-classy` inside that environment adds the spectral hydration class. The first run caches a
-large published dataset (~1.3 GB, the minimum-perihelion grid) under `data/`.
+large published dataset (~1.3 GB, the minimum-perihelion grid) under `data/`. Characterization
+runs by itself for the 5,000 reachable targets nearest in ΔV, a button adds the next 5,000, and
+every result is kept on disk, so nothing is looked up twice. Until a target is characterized it
+is left out of the desirable list; a switch on the table shows those too.
 
 ### Figures in the exported PDF (optional)
 

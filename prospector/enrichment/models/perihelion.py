@@ -54,6 +54,9 @@ def load_toliou_table(path: Path | None = None) -> np.ndarray | None:
 
     Returns None if the table is neither present nor fetchable. Perihelion history is one display
     column among many, so a body still enriches without it.
+
+    The text file is 1.3 GB and took half a minute to parse at the start of every characterization
+    job, so the parsed array is saved beside it once and memory-mapped after that.
     """
     target = Path(path) if path is not None else toliou_path()
     if not target.exists():
@@ -64,6 +67,14 @@ def load_toliou_table(path: Path | None = None) -> np.ndarray | None:
             target.write_bytes(gzip.decompress(response.content))
         except Exception:
             return None
+    binary = target.with_suffix(".npy")
+    if binary.exists() and binary.stat().st_mtime >= target.stat().st_mtime:
+        try:
+            table = np.load(binary, mmap_mode="r")
+            if table.ndim == 2 and table.shape[0] and table.shape[1] >= _THRESHOLD_COLUMNS.stop:
+                return table
+        except Exception:
+            pass                    # unreadable: parse the text again and rewrite it below
     try:
         lines = target.read_text().splitlines(keepends=True)
         with warnings.catch_warnings():
@@ -80,6 +91,10 @@ def load_toliou_table(path: Path | None = None) -> np.ndarray | None:
     # rather than surfacing as an error deep inside the lookup.
     if table.ndim != 2 or table.shape[0] == 0 or table.shape[1] < _THRESHOLD_COLUMNS.stop:
         return None
+    try:
+        np.save(binary, table)
+    except Exception:
+        pass                        # best effort; the next job parses the text again
     return table
 
 

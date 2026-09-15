@@ -177,3 +177,31 @@ def test_an_unreachable_catalogue_is_empty_not_fatal(monkeypatch):
     # Empty leaves the spin distribution unfitted, which leaves the stability margin unknown
     # -- and unknown only ever withholds a tier promotion.
     assert astorb.spin_catalog() == ([], [])
+
+
+def test_lookup_many_queries_once_per_chunk_and_maps_numbers_and_names(monkeypatch):
+    """Numbered bodies match on their number, designated ones on their designation, in one query;
+    an unknown body comes back empty; everything is cached so the next call asks nothing."""
+    payload = {"data": {"minorplanet": [
+        {"ast_number": 341843, "designameByIdDesignationPrimary": {"str_designame": "2008 EV5"},
+         "surveydata": _body(albedos=[0.09])["data"]["minorplanet"][0]["surveydata"]},
+        {"ast_number": None, "designameByIdDesignationPrimary": {"str_designame": "2020 XY"},
+         "surveydata": _body(periods=[4.5])["data"]["minorplanet"][0]["surveydata"]},
+    ]}}
+    calls = []
+    monkeypatch.setattr(astorb.requests, "post", _responder(payload, calls))
+    out = astorb.lookup_many(["341843", "2020 XY", "7", "341843"])
+    assert len(calls) == 1
+    assert calls[0]["variables"] == {"designations": ["2020 XY"], "numbers": [341843, 7]}
+    assert preferred_float(out["341843"]["albedo"]) == 0.09
+    assert preferred_float(out["2020 XY"]["period_h"]) == 4.5
+    assert out["7"] == astorb._empty()
+    assert astorb.lookup_many(["341843", "2020 XY", "7"]) == out and len(calls) == 1
+
+
+def test_a_failed_bulk_query_leaves_its_ids_empty_and_uncached(monkeypatch):
+    def _down(*_a, **_k):
+        raise ConnectionError("down")
+    monkeypatch.setattr(astorb.requests, "post", _down)
+    assert astorb.lookup_many(["341843"]) == {"341843": astorb._empty()}
+    assert not astorb._cache_path("341843").exists()

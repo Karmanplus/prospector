@@ -137,7 +137,9 @@ class AppState:
     screen_base: pd.DataFrame | None = None
     screen_df: pd.DataFrame | None = None       # screen_base + the `selected` column (rendered)
     enrich_job: str | None = None               # the dispatched characterization job id
-    enrich_reachable: list | None = None        # the pdes set that job was dispatched for
+    enrich_reachable: list | None = None        # reachable asteroid pdes, nearest by ΔV first
+    enrich_todo: list | None = None             # the ids that job looks up (not on disk yet)
+    enrich_window: int = 5000                   # how many of enrich_reachable are covered
     enrich_loaded: bool = False                    # its finished results merged into screen_df yet?
     target_view: str = "Reachability"              # canvas view selector
     # Show the bodies over the ΔV budget in the targets table too (with their shortfall), so an
@@ -229,6 +231,7 @@ def _clear_results() -> None:
     S.screen_df = None
     S.enrich_job = None
     S.enrich_reachable = None
+    S.enrich_todo = None
     S.enrich_loaded = False
     S.focus = None
     S.selected = None

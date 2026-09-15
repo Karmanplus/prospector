@@ -43,6 +43,7 @@ _CACHE_SCHEMA = "v3"  # bump when ENRICH_COLUMNS / normalize change, to invalida
 __all__ = [
     "enrich",
     "load_cached",
+    "cached_ids",
     "EnrichmentUnavailable",
     "EnrichmentFailed",
     "ENRICH_COLUMNS",
@@ -95,6 +96,12 @@ def load_cached(identifiers: list[str], cache_dir: str | Path | None = None) -> 
     if not frames:
         return normalize(pd.DataFrame(columns=["input_id"]))
     return normalize(pd.concat(frames, ignore_index=True))
+
+
+def cached_ids(identifiers: list[str], cache_dir: str | Path | None = None) -> set[str]:
+    """The identifiers already characterized on disk (no network, no read)."""
+    return {s for s in (str(x).strip() for x in identifiers)
+            if s and _obj_cache_path(s, cache_dir).exists()}
 
 
 def enrich(

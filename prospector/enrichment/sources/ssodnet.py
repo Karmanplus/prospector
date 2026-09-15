@@ -15,9 +15,13 @@ joining on it would silently lose every target whose name resolved.
 """
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass, field
 
 from prospector.enrichment.measurements import Measurement
+
+log = logging.getLogger(__name__)
 
 
 class SourceUnavailable(RuntimeError):
@@ -80,6 +84,20 @@ def _colors(frame) -> dict[str, list[Measurement]]:
     return out
 
 
+# The datacloud tables a body is looked up with.
+_DATACLOUD = ["albedos", "taxonomies", "colors", "spins"]
+
+
+def _rocks():
+    try:
+        import rocks
+    except ImportError as exc:
+        raise SourceUnavailable(
+            "the 'rocks' package is required for enrichment (install the enrichment extra)"
+        ) from exc
+    return rocks
+
+
 def lookup(identifier: str) -> Body:
     """Resolve one body and collect its published measurements.
 
@@ -87,18 +105,97 @@ def lookup(identifier: str) -> Body:
     unrecognised designation is one target's problem, and the rest of the batch continues.
     :class:`SourceUnavailable` is different: it means nothing can be looked up at all.
     """
+    rocks = _rocks()
     try:
-        import rocks
-    except ImportError as exc:
-        raise SourceUnavailable(
-            "the 'rocks' package is required for enrichment (install the enrichment extra)"
-        ) from exc
-
-    try:
-        rock = rocks.Rock(identifier, datacloud=["albedos", "taxonomies", "colors", "spins"])
+        rock = rocks.Rock(identifier, datacloud=_DATACLOUD)
     except Exception:
         return Body(input_id=identifier, resolved=False)
+    return _body_from_rock(identifier, rock)
 
+
+def lookup_many(identifiers: list[str]) -> dict[str, Body]:
+    """:func:`lookup` for a list, fetched in bulk.
+
+    The library resolves the names, then fetches the cards and the four tables for the whole
+    list concurrently, writing each answer to its cache; a body is then built from its cached
+    card with only the tables that landed, so nothing is fetched again one body at a time. (The
+    library never caches a failed table, and building a body with it would retry each one.)
+
+    Returns a Body per identifier; unresolvable ids come back ``resolved=False``. Raises
+    :class:`SourceUnavailable` when the cards came but not one table did for the whole list,
+    which is the tables service being down: characterizing then would cache every body as
+    having nothing measured. A failure of the bulk call itself returns an empty dict, so the
+    caller falls back to :func:`lookup` per body.
+    """
+    rocks = _rocks()
+    from rocks import config, resolve
+    from rocks import ssodnet as ssodnet_api
+
+    seen: set[str] = set()
+    ids = [s for s in (str(x).strip() for x in identifiers) if s and not (s in seen or seen.add(s))]
+    if not ids:
+        return {}
+    try:
+        resolved = resolve.identify(ids, return_id=True)
+        if isinstance(resolved, tuple):
+            resolved = [resolved]
+        sso_ids = [r[-1] for r in resolved]
+        valid = [s for s in sso_ids if s]
+        tables = {name: config.DATACLOUD[name]["ssodnet_name"] for name in _DATACLOUD}
+        # One stage at a time. Each stage already opens a connection per body; running the
+        # stages together on top of that made the server reset connections.
+        cards = _retrying(lambda: ssodnet_api.get_ssocard(valid)) if valid else []
+        if isinstance(cards, dict):
+            cards = [cards]
+        card_by_id = dict(zip(valid, cards))
+        for table in tables.values():
+            if valid:
+                _retrying(lambda table=table: ssodnet_api.get_datacloud_catalogue(valid, table))
+    except Exception as exc:
+        log.warning("bulk SsODNet lookup of %d bodies failed (%s: %s); looking them up one by one",
+                    len(ids), type(exc).__name__, exc)
+        return {}
+    if len(sso_ids) != len(ids):
+        log.warning("bulk SsODNet resolution returned %d ids for %d bodies; looking them up "
+                    "one by one", len(sso_ids), len(ids))
+        return {}
+
+    def _landed(sso_id: str) -> list[str]:
+        return [name for name, table in tables.items()
+                if (config.PATH_CACHE / f"{sso_id}_{table}.json").is_file()]
+
+    with_card = [s for s in valid if card_by_id.get(s)]
+    if with_card and not any(_landed(s) for s in with_card):
+        raise SourceUnavailable("SsODNet answered for the bodies but not for any of their "
+                                "measurement tables; try again later")
+
+    out: dict[str, Body] = {}
+    for identifier, sso_id in zip(ids, sso_ids):
+        card = card_by_id.get(sso_id) if sso_id else None
+        if not card:
+            out[identifier] = Body(input_id=identifier, resolved=False)
+            continue
+        try:
+            rock = rocks.Rock(sso_id, ssocard=dict(card), skip_id_check=True,
+                              datacloud=_landed(sso_id) or None)
+        except Exception:
+            out[identifier] = Body(input_id=identifier, resolved=False)
+            continue
+        out[identifier] = _body_from_rock(identifier, rock)
+    return out
+
+
+def _retrying(fetch, pause_s: float = 3.0):
+    """One bulk fetch, tried again once after a pause: the server drops a connection now and
+    then, and a retry is far cheaper than a whole chunk falling back to per-body lookups."""
+    try:
+        return fetch()
+    except Exception:
+        time.sleep(pause_s)
+        return fetch()
+
+
+def _body_from_rock(identifier: str, rock) -> Body:
     # A failed identification does not raise and does not come back empty: the input string is
     # echoed straight into `name`, so a body that does not exist looks like one that does with
     # nothing measured. The resolved SsODNet id is the reliable signal, being blank only when

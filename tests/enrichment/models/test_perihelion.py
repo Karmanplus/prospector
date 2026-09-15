@@ -75,3 +75,35 @@ def test_an_unreadable_table_degrades_to_none(tmp_path):
     broken = tmp_path / "broken.dat"
     broken.write_text("not a table\n")
     assert perihelion.load_toliou_table(broken) is None
+
+
+def test_the_parsed_table_is_kept_as_binary_and_reused(tmp_path, monkeypatch):
+    """Parsing the 1.3 GB text took half a minute per job. The first load writes the array
+    beside the text file; later loads memory-map it and never parse again."""
+    text = tmp_path / "grid.dat"
+    rows = [_row(1.0, 0.1, 5.0, 20.0, 3), _row(2.0, 0.2, 10.0, 21.0, 5)]
+    body = "\n".join(" ".join(f"{v:g}" for v in r) for r in rows)
+    text.write_text("h1\nh2\nh3\n" + body + "\nEND\n")
+    first = perihelion.load_toliou_table(text)
+    assert first.shape == (2, 160) and (tmp_path / "grid.npy").exists()
+
+    def _never(*_a, **_k):
+        raise AssertionError("the text was parsed again")
+
+    monkeypatch.setattr(perihelion.np, "loadtxt", _never)
+    again = perihelion.load_toliou_table(text)
+    assert np.array_equal(np.asarray(again), first)
+    assert perihelion.expected_min_perihelion_au(1.0, 0.1, 5.0, 20.0, again) == pytest.approx(
+        perihelion.expected_min_perihelion_au(1.0, 0.1, 5.0, 20.0, first))
+
+
+def test_a_newer_text_file_wins_over_a_stale_binary(tmp_path):
+    import os
+    import time
+    text = tmp_path / "grid.dat"
+    rows = [_row(1.0, 0.1, 5.0, 20.0, 3), _row(2.0, 0.2, 10.0, 21.0, 5)]
+    body = "\n".join(" ".join(f"{v:g}" for v in r) for r in rows)
+    text.write_text("h1\nh2\nh3\n" + body + "\nEND\n")
+    (tmp_path / "grid.npy").write_bytes(b"stale")
+    os.utime(text, (time.time() + 5, time.time() + 5))
+    assert perihelion.load_toliou_table(text).shape == (2, 160)

@@ -151,15 +151,23 @@ def _stat_cards() -> None:
                 f"color:{TEXT};font-family:monospace;font-size:1.1rem;line-height:1")
             ui.label("ΔV km/s").style(f"color:{MUTED};font-size:.62rem")
         _ring("reachable", n_reach, total, "positive")   # Quasar token -> GREEN (see ui.colors)
-        _ring("desirable", n_sel, n_reach, "primary")     # Quasar token -> ACCENT
+        tip = None
+        if df is not None and "uncharacterized" in df.columns and _enriched(df):
+            unknown = int(df["uncharacterized"].sum())
+            matched = int((df["selected"] & ~df["uncharacterized"]).sum())
+            tip = (f"{matched:,} characterized targets meet the filters; {unknown:,} "
+                   f"uncharacterized {'listed' if S.desirability.keep_unknown else 'hidden'}")
+        _ring("desirable", n_sel, n_reach, "primary", tip)     # Quasar token -> ACCENT
 
 
-def _ring(label: str, value: int, maximum: int, color: str) -> None:
-    with ui.column().classes("items-center gap-0"):
+def _ring(label: str, value: int, maximum: int, color: str, tip: str | None = None) -> None:
+    with ui.column().classes("items-center gap-0") as col:
         with ui.circular_progress(value=value, min=0, max=max(maximum, 1), size="2.6em",
                                   show_value=False, color=color):
             ui.label(f"{value:,}").style(f"color:{TEXT};font-size:.62rem;font-family:monospace")
         ui.label(label).style(f"color:{MUTED};font-size:.62rem")
+    if tip:
+        col.tooltip(tip)
 
 
 @ui.refreshable
@@ -209,16 +217,17 @@ def _value_placeholder() -> None:
     st = status.get("state")
     if st in (jobs.QUEUED, jobs.RUNNING):
         done, total = status.get("done", 0), status.get("total", 0)
-        _empty("diamond", f"characterizing reachable targets... {done}/{total}",
-               "Each target is looked up in public small-body catalogues; the view fills in "
-               "when the job finishes. Cancel is in the right rail.")
+        _empty("diamond", f"characterizing {total:,} new targets... {done}/{total}",
+               "The reachable targets nearest by ΔV are looked up in public small-body "
+               "catalogues, new ones only; the view fills in when the job finishes. Cancel is "
+               "in the right rail.")
     elif st == jobs.ERROR and _is_unavailable(status):
         _empty("diamond", "Target characterization is not installed in this environment.",
                "Reachability and every trajectory solve work without it. To rank targets by "
                "value, launch the app with:  pixi run -e enrichment app")
     elif st == jobs.ERROR:
         _empty("diamond", "Characterization failed.",
-               str(status.get("error") or status.get("message") or "see the worker log"))
+               _error_reason(status) or "see the worker log")
     else:
         _empty("diamond", "No characterization for these targets yet.")
 
@@ -430,7 +439,8 @@ def _status() -> None:
         frac = min(done / total, 1.0) if total else 0.0
         ui.linear_progress(value=frac, show_value=False).props("rounded").style("margin-top:.3rem")
         with ui.row().classes("items-center justify-between w-full"):
-            ui.label(f"characterizing {done}/{total}").style(f"color:{MUTED};font-size:.72rem")
+            ui.label(f"characterizing {done}/{total} new").style(
+                f"color:{MUTED};font-size:.72rem")
             ui.button("Cancel", on_click=_cancel_enrich).props("flat dense no-caps").style(
                 f"color:{MUTED};font-size:.7rem")
     elif st == jobs.ERROR:
@@ -438,12 +448,23 @@ def _status() -> None:
             ui.label("characterization unavailable").style(
                 f"color:{MUTED};font-size:.72rem")
         else:
-            ui.label("characterization failed").style(f"color:{RED};font-size:.72rem")
-    elif _enriched(S.screen_df):
+            ui.label("characterization failed").style(f"color:{RED};font-size:.72rem").tooltip(
+                _error_reason(status) or "see the job's worker log")
+    elif _enriched(S.screen_df) or S.enrich_reachable:
+        n = int(S.screen_df["tier"].notna().sum()) if "tier" in S.screen_df.columns else 0
+        reach = len(S.enrich_reachable or [])
         with ui.row().classes("items-center gap-1"):
             ui.icon("check_circle").style(f"color:{GREEN}").classes("text-sm")
-            n = int(S.screen_df["tier"].notna().sum())
-            ui.label(f"characterized {n}").style(f"color:{GREEN};font-size:.72rem")
+            ui.label(f"characterized {n:,} of {reach:,} reachable").style(
+                f"color:{GREEN};font-size:.72rem")
+        remaining = reach - min(reach, S.enrich_window)
+        if remaining > 0:
+            ui.button(f"Characterize next {min(_ENRICH_CAP, remaining):,}",
+                      on_click=_characterize_more).props("flat dense no-caps").style(
+                f"color:{ACCENT};font-size:.7rem").tooltip(
+                f"The {S.enrich_window:,} reachable targets nearest by ΔV are looked up "
+                f"automatically; each press adds the next batch. Results are kept on disk, so "
+                f"nothing is looked up twice.")
 
 
 # ======================================================================================
@@ -470,16 +491,34 @@ def _dock_table() -> None:
     elif _enriched(df):
         show = [c for c in ["full_name", "tier", "taxonomy", "diameter_m", "period_h", "lowthrust_dv"]
                 if c in df.columns]
-        sub = (df[df["selected"]].sort_values([c for c in ["tier", "lowthrust_dv"] if c in df.columns])
+        # Measured matches first, then the rows kept only because a value is unknown.
+        sub = (df[df["selected"]].sort_values(
+            [c for c in ["uncharacterized", "tier", "lowthrust_dv"] if c in df.columns])
                if "selected" in df.columns else df[df["reachable"]])
         title, n = "Desirable targets", int(sub.shape[0])
+        count = _selection_count(df)
     else:
         show = ["full_name", "H", "a", "e", "i", "lowthrust_dv"]
         sub = df[df["reachable"]].sort_values("lowthrust_dv")
         title, n = "Reachable targets", int(sub.shape[0])
     columns, rows = _table_data(sub, show)
-    dock(title, columns, rows, "pdes", S.sel_target, _pick_target, count_label=f"({n})",
+    dock(title, columns, rows, "pdes", S.sel_target, _pick_target,
+         count_label=count if _enriched(df) and not S.target_show_all else f"({n})",
          header_extra=_show_all_toggle)
+
+
+def _selection_count(df: pd.DataFrame) -> str:
+    """The dock's count for a described table: measured matches apart from the unknowns, and
+    whether the unknowns are in the list or hidden by the switch."""
+    if "uncharacterized" not in df.columns or "selected" not in df.columns:
+        return f"({int(df['selected'].sum()) if 'selected' in df.columns else 0})"
+    unknown = int(df["uncharacterized"].sum())
+    matched = int((df["selected"] & ~df["uncharacterized"]).sum())
+    if unknown == 0:
+        return f"({matched})"
+    if S.desirability.keep_unknown:
+        return f"({matched:,} match · {unknown:,} uncharacterized)"
+    return f"({matched:,} match · {unknown:,} uncharacterized hidden)"
 
 
 def _show_all_toggle() -> None:
@@ -487,6 +526,12 @@ def _show_all_toggle() -> None:
         "dense size=xs").style(f"color:{MUTED};font-size:.7rem").tooltip(
         "Include the bodies over the ΔV budget, with how far over they are, so one can still be "
         "set as the focus target")
+    if S.screen_df is not None and _enriched(S.screen_df) and not S.target_show_all:
+        ui.switch("show uncharacterized", value=bool(S.desirability.keep_unknown),
+                  on_change=lambda e: _set_desirability(keep=bool(e.value))).props(
+            "dense size=xs").style(f"color:{MUTED};font-size:.7rem").tooltip(
+            "Targets not characterized yet cannot be tested against the filters. Off: the list "
+            "holds only measured matches. On: they are listed too, marked ?.")
 
 
 def _set_show_all(e) -> None:
@@ -499,6 +544,10 @@ _LABELS = {"full_name": "Target", "tier": "Tier", "taxonomy": "Type", "diameter_
            "H": "Brightness (H)", "a": "a (AU)", "e": "e", "i": "i (°)"}
 _ROUND = {"diameter_m": 0, "period_h": 1, "lowthrust_dv": 2, "dv_short": 2, "H": 1, "a": 3,
           "e": 3, "i": 1}
+# Described properties that read "?" when not measured, so an empty cell is never mistaken for a
+# value that met the filter. Numeric ones sort the "?" rows below every number.
+_UNKNOWN_MARK = ("tier", "taxonomy", "diameter_m", "period_h")
+_SORT_UNKNOWN_LAST = "(a, b) => (a === '?' ? -1e30 : a) - (b === '?' ? -1e30 : b)"
 
 
 def _table_data(df: pd.DataFrame, show: list[str]):
@@ -506,7 +555,8 @@ def _table_data(df: pd.DataFrame, show: list[str]):
     the displayed, JSON-safe values; a click re-derives the full record from the frame, so the
     payload sent to the browser stays light even for a several-thousand-row reachable set."""
     columns = [{"name": c, "label": _LABELS.get(c, c), "field": c, "sortable": True,
-                "align": "left" if c in ("full_name", "taxonomy", "tier") else "right"}
+                "align": "left" if c in ("full_name", "taxonomy", "tier") else "right",
+                **({":sort": _SORT_UNKNOWN_LAST} if c in ("diameter_m", "period_h") else {})}
                for c in show]
     rows = []
     for rec in df.to_dict("records"):
@@ -514,8 +564,8 @@ def _table_data(df: pd.DataFrame, show: list[str]):
         row = {"pdes": str(full.get("pdes"))}
         for c in show:
             v = full.get(c)
-            if isinstance(v, float) and math.isnan(v):
-                row[c] = None
+            if v is None or (isinstance(v, float) and math.isnan(v)):
+                row[c] = "?" if c in _UNKNOWN_MARK else None
             elif isinstance(v, (int, float)) and c in _ROUND:
                 row[c] = round(float(v), _ROUND[c])
             else:
@@ -590,7 +640,7 @@ def _set_screening(*, h_max: float | None = None, margin: float | None = None) -
     _schedule_screen(rescreen=True)     # H / margin change reachability -> rebuild the base
 
 
-def _set_desirability(*, tier=_UNSET, diam=_UNSET, period=_UNSET) -> None:
+def _set_desirability(*, tier=_UNSET, diam=_UNSET, period=_UNSET, keep=_UNSET) -> None:
     """Rebuild the working Desirability from the rail. ``diam``/``period`` are ``(min, max)``
     tuples in slider units (a handle at 0 / the full-scale end means 'no bound'); ``_UNSET``
     keeps the current value so a control only edits its own term."""
@@ -603,6 +653,7 @@ def _set_desirability(*, tier=_UNSET, diam=_UNSET, period=_UNSET) -> None:
         min_tier = None if tier == "(any)" else tier
     try:
         S.desirability = Desirability(
+            keep_unknown=d.keep_unknown if keep is _UNSET else bool(keep),
             min_tier=min_tier,
             taxonomy_include=_composition_classes() or None,
             min_diameter_m=dmin, max_diameter_m=dmax,
@@ -781,8 +832,12 @@ def _overlay_mode_reset() -> None:
     _overlay_mode = None
 
 
-def _dispatch_enrichment(df: pd.DataFrame) -> None:
+def _dispatch_enrichment(df: pd.DataFrame, *, more: bool = False) -> None:
     """Submit a background characterization for this screen's reachable ASTEROIDS if it changed.
+
+    The nearest ``S.enrich_window`` by ΔV are covered (``more`` widens it by one batch); only the
+    ids not already on disk are sent, so the progress shown is new lookups and a slider moved
+    mid-run replaces the job with the still-missing remainder rather than starting over.
 
     Planets are excluded. What gets described is mining value, covering size, composition,
     structural stability and observability, assessed against a small-body database; asking it about
@@ -792,12 +847,30 @@ def _dispatch_enrichment(df: pd.DataFrame) -> None:
     reachable = df[df["reachable"]].dropna(subset=["pdes"]).sort_values("lowthrust_dv")
     if population.BODY_CLASS_COL in reachable.columns:
         reachable = reachable[reachable[population.BODY_CLASS_COL] != population.PLANET]
-    pdes = reachable["pdes"].astype(str).tolist()[:_ENRICH_CAP]
-    if pdes == S.enrich_reachable:
-        return                      # same reachable set -> the running/finished job still applies
-    S.enrich_reachable = pdes
+    pdes = reachable["pdes"].astype(str).tolist()
+    if more:
+        S.enrich_window += _ENRICH_CAP
+    _covered, todo = _enrichment_plan(pdes, enrichment.cached_ids(pdes), S.enrich_window)
+    if pdes == S.enrich_reachable and todo == S.enrich_todo:
+        return                      # nothing new to look up; the running/finished job applies
+    S.enrich_reachable = pdes       # everything on disk among these is merged, window or not
+    S.enrich_todo = todo
     S.enrich_loaded = False
-    S.enrich_job = jobs.submit_enrich(pdes) if pdes else None
+    S.enrich_job = jobs.submit_enrich(todo) if todo else None
+
+
+def _enrichment_plan(pdes: list[str], cached: set[str], window: int) -> tuple[list[str], list[str]]:
+    """Of the reachable ids nearest by ΔV first, the ``window`` the characterization covers and
+    the ids in it not yet on disk, which are all a job looks up. A finished batch leaves nothing
+    to do, so it never runs again; a wider window or a body newly in reach adds only the new."""
+    covered = pdes[:max(int(window), 0)]
+    return covered, [p for p in covered if p not in cached]
+
+
+def _characterize_more() -> None:
+    if S.screen_base is not None:
+        _dispatch_enrichment(S.screen_base, more=True)
+    _status.refresh()
 
 
 def _is_unavailable(status: dict) -> bool:
@@ -814,6 +887,17 @@ def _is_unavailable(status: dict) -> bool:
     """
     detail = f"{status.get('message', '')} {status.get('error', '')}".lower()
     return "unavailable" in detail or "not installed" in detail
+
+
+def _error_reason(status: dict) -> str:
+    """The last line of what the worker recorded for a failed job: the exception's own words,
+    without the traceback above them."""
+    text = str(status.get("error") or status.get("message") or "")
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    last = lines[-1]
+    return last.split(": ", 1)[1] if ": " in last and not last.startswith("File ") else last
 
 
 def _enrich_status() -> dict:
