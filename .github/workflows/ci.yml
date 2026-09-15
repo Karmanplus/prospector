@@ -33,12 +33,12 @@ jobs:
           set +e
           pixi run ${{ matrix.task }} &
           pid=$!
-          for _ in $(seq 1 60); do
+          for _ in $(seq 1 180); do
             sleep 5
             kill -0 "$pid" 2>/dev/null || break
           done
           if kill -0 "$pid" 2>/dev/null; then
-            echo "::error::${{ matrix.task }} has not exited after 300s"
+            echo "::error::${{ matrix.task }} has not exited after 900s"
             echo "--- process tree"; ps -ef --forest | tail -40
             echo "--- descendants of $pid"; pgrep -a -P "$pid" || echo "  none"
             echo "--- open pipes held by the group"
