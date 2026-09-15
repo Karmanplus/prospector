@@ -553,8 +553,7 @@ def solve_for_config(rc, *, progress=None, **kwargs) -> SpiralSolution:
     # its power-conversion chain, so a spiral run from a config uses the numbers the settings
     # window edits. Tests may pass a ready-made ArrayModel, or None to assume full output.
     if "array_model" not in opts:
-        from prospector.spacecraft.buildability import load_bus_model
-        opts["array_model"] = load_bus_model().array_model()
+        opts["array_model"] = rc.bus_model().array_model()
     common = dict(
         perigee_alt_km=rc.launch.perigee_alt_km,
         apogee_alt_km=rc.launch.apogee_alt_km,

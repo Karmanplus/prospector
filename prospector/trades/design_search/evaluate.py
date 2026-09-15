@@ -174,7 +174,7 @@ def spiral_curve(rc: ResolvedConfig, *, duty: float, vinf_max: float,
     power_grid = rc.power_thrust_isp_grid()
     grid_fp = (None if power_grid is None else
                hashlib.sha1(np.round(np.concatenate(power_grid), 4).tobytes()).hexdigest()[:8])
-    array_model = buildability.load_bus_model().array_model()
+    array_model = rc.bus_model().array_model()
     array_fp = hashlib.sha1(
         json.dumps(array_model.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()[:8]
     key = {
@@ -385,7 +385,7 @@ def evaluate_one(mission, catalog, launches, target: dict, *, engine_key: str,
     rc, estimated = build_config(mission, catalog, launches, dry_kg=dry, prop_kg=prop,
                                  n_engines=n_eng, engine_key=engine_key,
                                  propellant_key=propellant_key, propellants=propellants)
-    bus_model = buildability.apply_model_overrides(buildability.load_bus_model(),
+    bus_model = buildability.apply_model_overrides(rc.bus_model(),
                                                    model_overrides or {})
     prop_name = (propellants[propellant_key].name if propellant_key in propellants
                  else propellant_key)

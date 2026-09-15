@@ -1,0 +1,19 @@
+name: Hayabusa2 to Ryugu (2014-2018)
+# Hayabusa2 from its launch: 3 December 2014 on an H-IIA at C3 = 21 km^2/s^2 (4.6 km/s, Tsuda et
+# al., ISSFD 2015), a one-year Earth-resonant leg back to Earth, the swing-by of 3 December 2015 at
+# about 3090 km, then Ryugu by 27 June 2018. The gravity assist is Earth itself. The forward cruise
+# used about 24 kg of the 66 kg of xenon (Nishiyama et al. 2020).
+launch_window:
+- '2014-11-28'
+- '2014-12-08'
+launch_orbit: ESCAPE
+departure_vinf_kms: 4.6
+gravity_assist: earth
+arrive_by: '2018-06-27'
+return_trip: false
+return_by: null
+return_destination: EML2
+return_orbit_insert_dv: null
+return_max_tof_days: null
+time_at_asteroid: 0.0
+asteroid_payload_mass: 0.0

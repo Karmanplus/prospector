@@ -250,7 +250,8 @@ def order(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=["_both", "_wet", "_margin"]).reset_index(drop=True)
 
 
-def with_buildability(rows: pd.DataFrame, engine_key: str | None) -> pd.DataFrame:
+def with_buildability(rows: pd.DataFrame, engine_key: str | None,
+                      build_model: str = buildability.DEFAULT_BUS_MODEL) -> pd.DataFrame:
     """Backfill the buildability/cost columns for rows that don't carry them.
 
     The assessment (``prospector.spacecraft.buildability``) is a pure closed-form function of (dry,
@@ -275,7 +276,7 @@ def with_buildability(rows: pd.DataFrame, engine_key: str | None) -> pd.DataFram
                 else pd.Series(default, index=rows.index))
         from prospector.spacecraft.propellants import engine_on_propellant, load_propellants
         propellants = load_propellants()
-        model = buildability.load_bus_model()
+        model = buildability.load_bus_model(name=build_model)
         gases = (rows["propellant_key"].fillna("xenon") if "propellant_key" in rows.columns
                  else pd.Series("xenon", index=rows.index))
         igns = (rows["revolutions"] if "revolutions" in rows.columns

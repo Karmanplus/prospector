@@ -8,6 +8,7 @@ which is the part that can be wrong without anything crashing.
 from __future__ import annotations
 
 import math
+from datetime import date
 
 import pytest
 
@@ -22,7 +23,12 @@ def _config(dry: float = 250.0, prop: float = 325.0, n: int = 4,
             return_trip: bool = False) -> ResolvedConfig:
     # Set the trip shape explicitly in both directions: the library's mission may itself be a round
     # trip, and only ever ADDING the flag left "one-way" cases still flying a return.
-    mission = load_mission(lib.mission_key())
+    # The mission shape these expectations were measured against: a launcher-provided escape
+    # over a four-year window (the former direct Dawn example), whichever mission the library
+    # lists first today.
+    mission = load_mission(lib.mission_key()).model_copy(update={
+        "launch_orbit": "ESCAPE", "departure_vinf_kms": None,
+        "launch_window": (date(2007, 9, 26), date(2007, 10, 15)), "arrive_by": date(2011, 7, 16)})
     if return_trip:
         mission = mission.model_copy(update={
             "return_trip": True, "return_by": mission.arrive_by.replace(year=2032)})

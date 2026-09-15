@@ -1272,7 +1272,9 @@ def test_a_hand_broken_session_file_restores_nothing_and_never_raises(tmp_path, 
         path.write_text(text)
         assert state.open_project(project) == []
         assert S.solve_run_id is None
-        assert S.departure_vinf == 0.0, "a junk knob value was trusted"
+        # The baseline is the mission's planned speed (zero when it has none), never the junk.
+        assert S.departure_vinf == float(S.mission.departure_vinf_kms or 0.0), \
+            "a junk knob value was trusted"
 
 
 def test_the_session_pointer_only_writes_when_the_state_moves(tmp_path, monkeypatch):

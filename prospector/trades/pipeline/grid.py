@@ -30,7 +30,7 @@ import os
 import numpy as np
 
 from prospector.solvers import lambert as lb
-from prospector.solvers import simsflanagan as sf
+from prospector.solvers import transfer
 from prospector.trades.pipeline.arcs import _mission_elements
 
 
@@ -53,6 +53,10 @@ def jsonable(terms: dict) -> dict:
 # km/s at one restart, 3.0194 from scratch, 3.0187 at four, 2.9925 at eight. Gains past four are
 # small, so four is the default when the grid quotes delta-v. The feasibility-only pass uses one.
 GRID_RESTARTS = 4
+# A two-leg restart is a whole new impulsive geometry descended twice, so a flyby cell at the
+# direct grid's four restarts costs about twice a live direct cell and dead cells cost the same.
+# Two keeps a 16x16 flyby grid within about twice the direct grid's time.
+FLYBY_GRID_RESTARTS = 2
 FAST_RESTARTS = 1
 # Segments per cell, held the same across the grid. A stored solution cannot be re-sampled to a
 # different segment count (see ``simsflanagan._adapt_decision_vector``), so the grid and anything
@@ -97,21 +101,22 @@ def grid_axes(rc, *, n_dep: int = 8, n_tof: int = 8, min_tof_days: float = 150.0
 
 
 def leg_terms(sol) -> dict:
-    """The thrust terms a solution was found under, JSON-safe, so its vector can be rebuilt to the
-    same trajectory later.
-
-    A vector alone no longer determines the trajectory. The cruise operating point follows the
-    Sun, so a solve settles on per-segment thrust ceilings (``seg_caps``) and Isps (``seg_isp_s``)
-    of its own path, and its leg thrust and Isp are the point it converged to. Rebuilt without
-    them, the same vector flies a different thrust history: measured on an Apophis cell, the
-    matchpoint mismatch went from 1.5e-5 to 3.6e-3 and the cell read as not converged. These
-    travel next to the vector and go straight back into ``rebuild_for_config``.
-    """
+    """The thrust terms a solution was found under (``seg_caps``, ``thrust_N``, ``isp_s``,
+    ``seg_isp_s``), JSON-safe, for ``rebuild_for_config``. A vector alone does not fix the
+    trajectory: rebuilt without them an Apophis cell's mismatch went 1.5e-5 to 3.6e-3."""
     caps = getattr(sol, "seg_caps", None)
     seg_isp = getattr(sol, "seg_isp_s", None)
-    return {"seg_caps": None if caps is None else np.asarray(caps, float).tolist(),
-            "thrust_N": float(sol.thrust_N), "isp_s": float(sol.isp_s),
-            "seg_isp_s": None if seg_isp is None else np.asarray(seg_isp, float).tolist()}
+    isp = sol.isp_s
+    # Two-leg: per-leg arrays stored flat (split at leg one's nseg on rebuild), Isps as the pair.
+
+    def flat(parts):
+        return np.concatenate([np.asarray(a, float).ravel() for a in parts]).tolist()
+
+    return {"seg_caps": None if caps is None else flat(caps if isinstance(caps, tuple) else [caps]),
+            "thrust_N": float(sol.thrust_N),
+            "isp_s": [float(v) for v in isp] if isinstance(isp, (tuple, list)) else float(isp),
+            "seg_isp_s": (None if seg_isp is None
+                          else flat(seg_isp if isinstance(seg_isp, tuple) else [seg_isp]))}
 
 
 def _cell(args):
@@ -126,7 +131,8 @@ def _cell(args):
     try:
         rc = ResolvedConfig.model_validate(config_json)
         target = lb.planet_from_row(target_row)
-        sol = sf.solve_cell_for_config(rc, target, dep_mjd2000=float(dep), tof_days=float(tof),
+        leg = transfer.for_config(rc)
+        sol = leg.solve_cell_for_config(rc, target, dep_mjd2000=float(dep), tof_days=float(tof),
                                        x0=None if x0 is None else np.asarray(x0, float), **kwargs)
         return {"dep_mjd2000": float(sol.dep_mjd2000), "tof_days": float(sol.tof_days),
                 "dv_kms": float(sol.dv_kms), "final_mass_kg": float(sol.final_mass_kg),
@@ -191,6 +197,8 @@ def lowthrust_grid(rc, target_row, *, n_dep: int = 8, n_tof: int = 8,
     # The thrust terms each vector was solved under, kept beside it (see leg_terms).
     terms: list[list] = [[None] * n_t for _ in range(n_d)]
 
+    if rc.mission.gravity_assist:
+        restarts = min(int(restarts), FLYBY_GRID_RESTARTS)
     kwargs = {**sf_kwargs, "nseg": int(nseg), "restarts": int(restarts)}
     if available_power_W is not None:
         kwargs["available_power_W"] = float(available_power_W)
@@ -342,7 +350,7 @@ def _polish(args):
     try:
         rc = ResolvedConfig.model_validate(config_json)
         target = lb.planet_from_row(target_row)
-        sol = sf.solve_for_config(rc, target, x0=np.asarray(x0, float),
+        sol = transfer.for_config(rc).solve_for_config(rc, target, x0=np.asarray(x0, float),
                                   min_tof_days=max(1.0, float(tof) - CELL_TOL_DAYS),
                                   max_tof_days=float(tof) + CELL_TOL_DAYS, **kwargs)
         # Key on the flight time that was asked for, not the one that came back: the solved value
@@ -388,7 +396,10 @@ def polish_best_per_flight_time(rc, target_row, grid: dict, *, restarts: int = G
     if available_power_W is not None:
         kwargs["available_power_W"] = float(available_power_W)
     config_json = rc.model_dump(mode="json")
-    row = dict(target_row)
+    # The orbit the cells were solved against, re-osculated at the arrival era; a polish against
+    # the catalogue row lands on a vector that misses by 4e-3 when a click rebuilds it against the
+    # stored row (Didymos, three years of drift).
+    row = dict(_mission_elements(rc, dict(target_row)))
     vectors = grid["decision_vectors"]
 
     args = []

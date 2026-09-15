@@ -4,7 +4,7 @@ These belong to the application rather than to any project or vehicle: the numbe
 a vehicle other than its trajectory is worked out from, covering solar arrays, bus proportions,
 tank and unit costs, plus the properties of each working gas: what it costs, how much tank it
 needs, and the factors used to estimate an engine's performance on a gas it was not measured on.
-They live in config files tracked in the repo (``configs/build-model.yaml`` and
+They live in config files tracked in the repo (``configs/build-models/<profile>.yaml`` and
 ``configs/propellants/``), so editing them here changes what every project uses.
 
 One tabbed dialog, opened from the top bar. Save writes each part out through its own library
@@ -37,6 +37,8 @@ from prospector.spacecraft.radiation import (
     load_radiation_models,
     save_radiation_model,
 )
+from ui import state
+from ui.state import S
 from ui.theme import ACCENT, BORDER, MUTED, PANEL, PANEL2, TEXT
 
 # The build-model fields grouped into tabs by component, so each component's mass and cost
@@ -71,6 +73,9 @@ _GROUPS: dict[str, list[str]] = {
     ],
     "Programmatics": [
         "propellant_cost_per_kg", "iat_pct", "pm_pct",
+    ],
+    "Flight rules": [
+        "flyby_min_altitude_km",
     ],
 }
 
@@ -118,6 +123,8 @@ _LABELS: dict[str, str] = {
     "propellant_cost_per_kg": "Propellant cost ($/kg)",
     "iat_pct": "Integration & test (%)",
     "pm_pct": "Program management (%)",
+    # flight rules
+    "flyby_min_altitude_km": "Minimum flyby altitude (km)",
 }
 
 # Suffix -> the unit shown in a field's label (longest match first). Fallback humanizer for any
@@ -131,6 +138,10 @@ _UNITS = [
 # Plain-language help for each build-model field (shown as a hover tooltip). A field with no entry
 # falls back to no tooltip; keep these in step with prospector.spacecraft.buildability.BusModel.
 _HELP: dict[str, str] = {
+    # flight rules
+    "flyby_min_altitude_km": "Closest a gravity-assist flyby may pass above the planet's surface. "
+                             "A lower pass bends the path more; this is the margin kept for "
+                             "navigation.",
     # power & arrays
     "housekeeping_W": "Always-on bus power: avionics, wheels, cameras, thermal.",
     "ops_load_W": "Payload and comms power, thrusters off. Arrays are sized on whichever mode "
@@ -215,13 +226,25 @@ def _label_for(field: str) -> str:
     return field.replace("_", " ")
 
 
-def open_settings() -> None:
-    """Open the Global-settings dialog (build/cost model, propellants, launch types,
-    return destinations), which is everything shared across projects rather than owned by one."""
-    model = buildability.load_bus_model()
+def adopt_profile(name: str) -> bool:
+    """Make ``name`` the open project's build-model profile. Returns whether anything changed;
+    the choice is saved with the project, so it marks the project dirty."""
+    if S.project is None or name == S.build_model:
+        return False
+    S.build_model = name
+    state.mark_dirty()
+    return True
+
+
+def open_settings(profile: str | None = None) -> None:
+    """Open the Global-settings dialog: one build/cost profile (the open project's unless
+    ``profile`` says otherwise), plus the propellant, radiation, launch-type and return-destination
+    libraries, which are shared across projects."""
+    profile = profile or S.build_model
+    model = buildability.load_bus_model(name=profile)
     grouped = set().union(*_GROUPS.values())
     # The mass CURVE is structured (a list of segments), not a scalar coefficient: it is edited in
-    # configs/build-model.yaml and shown read-only below the Array-physics grid, so it must not
+    # the profile's YAML and shown read-only below the Array-physics grid, so it must not
     # fall into the auto-rendered "Other" number grid.
     other = [f for f in buildability.BusModel.model_fields
              if f not in grouped and f != "array_mass_curve"]
@@ -249,6 +272,37 @@ def open_settings() -> None:
         with ui.row().classes("items-center w-full no-wrap"):
             ui.icon("tune").style(f"color:{ACCENT}")
             ui.label("Global settings").style(f"color:{TEXT};font-weight:600")
+
+        def _switch(name: str) -> None:
+            adopt_profile(name)
+            dlg.close()
+            open_settings(name)
+
+        def _copy_as() -> None:
+            key = state.slug(copy_name.value or "")
+            if not key:
+                err.text = "Name the new profile first."
+                err.set_visibility(True)
+                return
+            if key in buildability.list_bus_models():
+                err.text = f"A profile named '{key}' already exists."
+                err.set_visibility(True)
+                return
+            buildability.save_bus_model(model, name=key)
+            _switch(key)
+
+        # The sizing and cost coefficients are one profile of several; the picker names the one this
+        # dialog edits, and an open project is built with the one it names.
+        with ui.row().classes("items-center w-full no-wrap gap-2"):
+            ui.select(buildability.list_bus_models(), value=profile, label="Build-model profile",
+                      on_change=lambda e: _switch(e.value)).props("dense outlined") \
+                .classes("col").tooltip(
+                    "Which set of sizing and cost coefficients the open project is built with. "
+                    "Saved with the project. Other tabs are shared by every project.")
+            copy_name = ui.input(placeholder="new profile name").props("dense outlined") \
+                .classes("col")
+            ui.button("Copy as", icon="content_copy", on_click=_copy_as).props("flat no-caps") \
+                .style(f"color:{MUTED}").tooltip("Save this profile's numbers under a new name and switch to it.")
 
         with ui.tabs().props("dense").classes("w-full") as tabs:
             for name in tabs_spec:
@@ -287,7 +341,7 @@ def open_settings() -> None:
                 elif why:
                     raise ValueError(why)
                 new_model = buildability.BusModel.model_validate(merged)
-                buildability.save_bus_model(new_model)
+                buildability.save_bus_model(new_model, name=profile)
                 _save_propellants(gas_fields)
                 _save_radiation(rad_fields)
                 _commit_catalog(launches, LaunchOrbit)

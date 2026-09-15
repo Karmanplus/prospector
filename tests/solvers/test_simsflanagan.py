@@ -558,3 +558,55 @@ def test_a_flat_ceiling_takes_the_light_path_and_the_same_positions():
     sloped._flat = True
     sloped._cap_fn_rows(x)
     assert sloped._flat is False
+
+
+def test_exact_departure_speed_constraint_in_the_udp():
+    """A launcher delivers its departure speed exactly, so the speed bound gains its lower side:
+    one more inequality, violated below the speed, met at it, with a gradient that matches the
+    declared sparsity and central differences."""
+    target = lb.target_planet(name="2008 EV5", **EV5)
+    common = dict(mass_kg=MASS, thrust_N=THRUST, isp_s=ISP, nseg=10,
+                  launch_window=LAUNCH, arrive_by=ARRIVE_BY,
+                  vinf_dep_kms=1.5, vinf_arr_kms=0.1, window_slack_days=0.0,
+                  min_tof_days=120.0, max_tof_days=None, max_duty_cycle=1.0,
+                  max_dep_decl_deg=None)
+    exact = sf._make_udp(target, vinf_dep_exact=True, **common)
+    ceiling = sf._make_udp(target, **common)
+    assert exact.get_nic() == ceiling.get_nic() + 1
+    lo, _ = exact.get_bounds()
+    x = np.zeros(len(lo))
+    x[sf._I_T0], x[exact._i_tof], x[sf._I_MF] = 8030.0, 300.0, MASS * 0.9
+    x[sf._I_VINF_DEP] = [1000.0, 0.0, 0.0]                      # 1.0 of 1.5 km/s: too slow
+    assert exact.fitness(x)[-1] > 0.0
+    x[sf._I_VINF_DEP] = [0.0, 1500.0, 0.0]                      # exactly the speed
+    assert abs(exact.fitness(x)[-1]) < 1e-12
+    g = np.asarray(exact.gradient(x))
+    sp = exact.gradient_sparsity()
+    assert len(g) == len(sp)
+    last = [i for i, (r, _) in enumerate(sp) if r == 1 + exact.get_nec() + exact.get_nic() - 1]
+    for i in last:
+        _, col = sp[i]
+        h = 0.5
+        xp, xm = x.copy(), x.copy()
+        xp[col] += h
+        xm[col] -= h
+        fd = (exact.fitness(xp)[-1] - exact.fitness(xm)[-1]) / (2 * h)
+        assert g[i] == pytest.approx(fd, rel=1e-6, abs=1e-12)
+
+
+def test_the_coast_seed_carries_the_transfer_arrival_speed():
+    """For a flyby or impactor arrival the seed keeps the two-burn transfer's arrival speed, so a
+    ballistic route starts matched; for a rendezvous the same seed clips to the small bound."""
+    target = lb.target_planet(name="2008 EV5", **EV5)
+    t0 = lb.mjd2000_from_date(LAUNCH[0]) + 10.0
+    seed = lb.lambert_transfer(lb.earth_planet(), target, t0, t0 + 300.0, max_revs=0)
+    common = dict(mass_kg=MASS, thrust_N=THRUST, isp_s=ISP, nseg=10, launch_window=LAUNCH,
+                  arrive_by=ARRIVE_BY, vinf_dep_kms=5.0, window_slack_days=0.0,
+                  min_tof_days=120.0, max_tof_days=None, max_duty_cycle=1.0,
+                  max_dep_decl_deg=None)
+    wide = sf._make_udp(target, vinf_arr_kms=8.0, **common)
+    z = sf._seed_decision_vector(seed, wide, MASS, 10)
+    assert np.linalg.norm(z[sf._I_VINF_ARR]) / 1e3 == pytest.approx(seed.vinf_arr_kms, rel=1e-6)
+    tight = sf._make_udp(target, vinf_arr_kms=0.1, **common)
+    z = sf._seed_decision_vector(seed, tight, MASS, 10)
+    assert np.all(np.abs(z[sf._I_VINF_ARR]) <= 100.0 + 1e-9)

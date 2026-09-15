@@ -1,0 +1,19 @@
+name: Dawn to Vesta (2007-2011)
+# NASA's Dawn, launch to Vesta rendezvous: launched 27 September 2007 (window opened the 26th),
+# Mars gravity assist 17 February 2009 at 542 km, Vesta orbit 16 July 2011. Departure speed
+# 3.3 km/s from the 1.00 x 1.62 AU post-launch heliocentric orbit (Astronautix); departure_vinf_kms
+# below carries it. Dawn spent about 247 kg of xenon on this leg.
+launch_window:
+- '2007-09-26'
+- '2007-10-15'
+launch_orbit: ESCAPE
+departure_vinf_kms: 3.3
+gravity_assist: mars
+arrive_by: '2011-07-16'
+return_trip: false
+return_by: null
+return_destination: EML2
+return_orbit_insert_dv: null
+return_max_tof_days: null
+time_at_asteroid: 0.0
+asteroid_payload_mass: 0.0

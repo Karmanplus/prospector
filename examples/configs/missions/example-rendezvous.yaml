@@ -5,6 +5,7 @@ launch_window:
 - '2029-01-01'
 - '2029-03-31'
 launch_orbit: SSO
+departure_vinf_kms: null
 arrive_by: '2031-06-01'
 return_trip: false
 return_by: null

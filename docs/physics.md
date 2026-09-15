@@ -615,3 +615,65 @@ spiral, restarting the thruster roughly once per shadowed revolution). A mission
 than a unit is qualified for is **flagged, not vetoed**; the check is a caution. Both are optional;
 `None` means unspecified and that limit is simply not checked, so populating them is the
 conservative direction.
+
+## Gravity assist (`flyby`)
+
+A mission may name one planet to swing past on the outbound cruise (`Mission.gravity_assist`:
+Venus, Earth, Mars or Jupiter). The cruise is then two Sims-Flanagan legs, Earth to the planet and
+the planet to the target, solved as one problem: the flyby date, the mass at the flyby and the
+velocities relative to the planet going in and coming out are decision variables alongside both
+throttle histories, and the objective is still final mass. Solving the legs one after the other
+would fix the flyby blind to what the second leg needs, so it is not done that way.
+
+The flyby is the patched-conic model: an instantaneous, unpowered turn at the planet. Two
+constraints tie the legs. The speed relative to the planet is the same going in and coming out.
+The turn angle is no more than the planet can produce at the lowest allowed periapsis,
+`flyby_min_altitude_km` in the build-model profile, which for a given periapsis depends on the
+approach speed: a slower approach bends more. Both are `pykep.fb_con`. The encounter lasts hours
+against a cruise of years, so the approximation is the one preliminary design uses; no powered
+flyby and no B-plane targeting are modelled.
+
+Each leg carries the same Sun-distance thrust ceiling and per-segment Isp as a direct leg, with
+its own leg Isp, and the arrival deadline and the launch's declination cone apply as before. The
+gradient is the two legs' own match-point gradients from pykep, the chain through the bodies'
+ephemerides, the flyby derivatives and the ceiling chain, all analytic; it is checked against
+central differences in the tests, to about a part in a thousand on the epoch columns, which is
+the analytic ephemeris's own departure from Keplerian motion.
+
+The two-leg solver is a leg solver like the one-leg one, with the same three entry points: a
+free solve, a grid cell with the departure day and the total flight time held, and a rebuild from a
+stored vector. The pipeline picks one or the other from the mission's gravity assist
+(`prospector.solvers.transfer`) and the grid, the cruise, the sweep and a cell click know nothing
+else about the difference. A mission via Mars therefore has a Mars porkchop: every cell is a
+two-leg trip, and the cell finds its own flyby.
+
+Where a cell starts matters more than anything else about it. The joint problem has many local
+optima: 36 descents from 36 starts of the same kind landed anywhere between 211 and 271 kg of
+xenon on Dawn, 848 to 1,336 kg on Psyche. A start has to be a consistent geometry or the descent
+dies on it. Two Lambert arcs forced through the planet at a cell's fixed dates are not one: 14 to
+17 km/s of mismatch, 2 of 64 Dawn cells closing. The impulsive gravity-assist optimum between the
+cell's two days is (`pykep.trajopt.mga_1dsm` with both days pinned, the flyby split and the
+deep-space burn free, searched under a fixed seed, well under a second): 16 of 64 Dawn cells and
+25 of 64 Psyche cells, every cell at the long flight times, the pattern the direct grid shows.
+The impulsive problem has several optima at one pair of days too, so each restart of the two-leg
+solve is its own impulsive geometry under its own fixed seed: on Hayabusa2's best cell eight of
+them descended to anywhere from 22 to 59 kg, and the 22 kg one is the low, hard turn the mission
+flew. Each geometry is descended first with the flyby split held, which leaves only the throttle
+history to find, then with everything free; a geometry still far off with the split held is not
+freed (measured 0.35 to 0.99 mismatch against 1e-5 for one that closes). Grid cells run two
+geometries, which keeps a 16x16 flyby grid near twice the direct grid's time; the cruise runs
+eight per start, from a grid cell and, with "Search starts" above one, from a spread of cells
+around it, the multi-start the direct cruise already runs. Everything is seeded
+deterministically; the same inputs give the same answer.
+
+A launcher that provides the escape delivers its departure speed exactly, so for those launch
+types both solvers hold the mission's departure speed rather than treating it as a ceiling; the
+direction stays free inside the launch's declination cone. A spiral buys its departure speed with
+propellant, and there the speed remains an upper bound the optimizer may undershoot.
+
+The direct transfer is a comparison, not a fallback. When a mission names a planet, every result
+is a two-leg trip; the cruise run also flies the same cell direct once and reports it as a line
+beside the answer. A cell whose impulsive route needs more velocity change than the tank can give
+is not solved, and reads as blank on the porkchop like a cell past the deadline.
+
+See `docs/validation.md` for what the search lands on against the flown missions.

@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Literal, TypeVar
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from prospector import paths
 from prospector.constants import G0_KM_S2, G0_M_S2, SECONDS_PER_DAY
@@ -123,6 +123,10 @@ class Vehicle(BaseModel):
         return sum(m.count for m in self.engines)
 
 
+# Planets a cruise may swing past (pykep jpl_lp keys; Earth for a resonant return).
+GRAVITY_ASSIST_BODIES = ("venus", "earth", "mars", "jupiter")
+
+
 class Mission(BaseModel):
     """The flight profile: when the spacecraft launches, when it must arrive, and the trip shape."""
 
@@ -131,6 +135,17 @@ class Mission(BaseModel):
     # The launch type only, as a key into the launch library (configs/launches/). What escape costs
     # is derived from it (estimate, then propagated spiral), never stored here.
     launch_orbit: str = Field(default="TLI", description="Launch type (launch-library key).")
+    # Planned departure speed relative to Earth (km/s); seeds the flight view's slider and prices
+    # a headless resolve. None = slider default (0).
+    departure_vinf_kms: float | None = Field(
+        default=None, ge=0, description="Planned departure v-infinity (km/s); None = slider default.")
+    # Flyby planet: two legs joined by an unpowered flyby (prospector.solvers.flyby). None = direct.
+    gravity_assist: str | None = Field(
+        default=None, description="Flyby planet on the outbound cruise (venus, earth, mars, jupiter); None = direct.")
+    # 0: rendezvous (solver slack applies); above 0: may pass the target at up to this speed
+    # (flyby or impactor), so no stay and no return.
+    arrival_vinf_kms: float = Field(
+        default=0.0, ge=0, description="Max arrival speed relative to the target (km/s); 0 = rendezvous.")
     arrive_by: date = date(2029, 3, 1)
 
     return_trip: bool = False
@@ -150,6 +165,17 @@ class Mission(BaseModel):
         default=0.0, ge=0, description="Mass collected at the asteroid (kg); loads the return leg only."
     )
 
+    @field_validator("gravity_assist")
+    @classmethod
+    def _check_gravity_assist(cls, v: str | None) -> str | None:
+        if v is None or not str(v).strip():
+            return None
+        key = str(v).strip().lower()
+        if key not in GRAVITY_ASSIST_BODIES:
+            raise ValueError(f"gravity_assist must be one of {', '.join(GRAVITY_ASSIST_BODIES)}, "
+                             f"not {v!r}")
+        return key
+
     @model_validator(mode="after")
     def _check_dates(self) -> Mission:
         start, end = self.launch_window
@@ -163,6 +189,9 @@ class Mission(BaseModel):
                 raise ValueError("return_trip is set but return_by is missing")
             if self.return_by < self.arrive_by:
                 raise ValueError("return_by is before arrive_by")
+            if self.arrival_vinf_kms > 0:
+                raise ValueError("a trip that passes the target (arrival_vinf_kms above 0) "
+                                 "cannot stay at it or return; set arrival_vinf_kms to 0")
         return self
 
 
@@ -229,6 +258,8 @@ class Study(BaseModel):
                     "None means no project default; the user picks one in Find targets.")
     screening: Screening = Field(default_factory=Screening)
     desirability: Desirability = Field(default_factory=Desirability)
+    # Sizing-and-cost profile, a key into ``configs/build-models/``.
+    build_model: str = Field(default="default", description="Build-model profile (library reference).")
 
 
 # ===========================================================================
@@ -254,6 +285,8 @@ class ResolvedConfig(BaseModel):
     # charge, the cruise budget, the departure mass, and the departure window together (the
     # escape/cruise trade made explicit).
     departure_vinf_kms: float = Field(default=0.0, ge=0)
+    # ``Study.build_model``, carried so a worker rebuilding from a job payload reads the same profile.
+    build_model: str = Field(default="default")
     # A converged, numerically-propagated spiral's escape cost (km/s) and duration (days) AT the
     # departure v-infinity above, set at runtime by whoever verified the run matches this exact
     # config (see launch.escape_fingerprint) and priced it off the run's dV-vs-v-infinity curve.
@@ -271,7 +304,8 @@ class ResolvedConfig(BaseModel):
     def build(cls, mission: Mission, vehicle: Vehicle, screening: Screening,
               catalog: dict[str, Engine],
               desirability: Desirability | None = None,
-              launches: dict[str, LaunchOrbit] | None = None) -> ResolvedConfig:
+              launches: dict[str, LaunchOrbit] | None = None,
+              build_model: str = "default") -> ResolvedConfig:
         """Resolve the vehicle's engine references and the mission's launch type; assemble.
 
         ``launches`` defaults to the shipped launch library so existing callers resolve without
@@ -313,11 +347,13 @@ class ResolvedConfig(BaseModel):
         # figure. Everything downstream reads solar_power_W, so leaving it at zero would mean the
         # spiral, the cruise throttle and the mass budget each deciding for themselves what an
         # unsized array can do.
-        from prospector.spacecraft.buildability import with_sized_array
-        vehicle = with_sized_array(vehicle, engines)
+        from prospector.spacecraft.buildability import load_bus_model, with_sized_array
+        vehicle = with_sized_array(vehicle, engines, load_bus_model(name=build_model))
         return cls(mission=mission, vehicle=vehicle, screening=screening,
                    desirability=desirability or Desirability(), engines=engines,
-                   launch=launches[mission.launch_orbit])
+                   launch=launches[mission.launch_orbit],
+                   departure_vinf_kms=float(mission.departure_vinf_kms or 0.0),
+                   build_model=build_model)
 
     @property
     def performance(self) -> dict:
@@ -357,11 +393,21 @@ class ResolvedConfig(BaseModel):
         The array is sized to carry this on top of the thrusters (see
         `prospector.spacecraft.buildability.bol_power_terms`), so the escape and the cruise have
         to take it off the top before handing the rest to the thrusters, or they fly on power the
-        bus is already using. ``model`` defaults to the application's build model.
+        bus is already using. ``model`` defaults to this study's build-model profile.
         """
-        from prospector.spacecraft.buildability import load_bus_model
-        bm = load_bus_model() if model is None else model
+        bm = self.bus_model() if model is None else model
         return float(bm.housekeeping_W) / float(bm.avionics_power_eff())
+
+    @property
+    def arrival_vinf_kms(self) -> float:
+        """Arrival speed bound the cruise solves to (km/s): the mission's, floored at the 0.1 km/s
+        rendezvous slack (``simsflanagan.solve``)."""
+        return max(float(self.mission.arrival_vinf_kms), 0.1)
+
+    def bus_model(self):
+        """This study's sizing-and-cost profile, read fresh."""
+        from prospector.spacecraft.buildability import load_bus_model
+        return load_bus_model(name=self.build_model)
 
     def thrust_isp_at_power(self, available_power_W: float) -> tuple[float, float]:
         """The stack's (thrust_N, Isp_s) when the bus supplies ``available_power_W``: the operating
@@ -693,7 +739,7 @@ def resolve_study(study: Study, config_dir: str | Path | None = None,
         catalog = load_engines(_catalog_dir(config_dir, "engines"))
     launches = load_launch_orbits(_catalog_dir(config_dir, "launches"))
     return ResolvedConfig.build(mission, vehicle, study.screening, catalog, study.desirability,
-                                launches=launches)
+                                launches=launches, build_model=study.build_model)
 
 
 def _catalog_dir(config_dir: str | Path | None, kind: str) -> Path:

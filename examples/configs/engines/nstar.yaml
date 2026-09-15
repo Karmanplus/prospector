@@ -1,0 +1,37 @@
+name: NSTAR (Deep Space 1, Dawn)
+source: >-
+  public: Goebel & Katz, Fundamentals of Electric Propulsion (JPL DESCANSO series), ch. 9, Table 9-2, the
+  NSTAR throttle table flown on Deep Space 1 and reused on Dawn. Engine-input power (post-PPU),
+  calculated thrust and specific impulse per level. Public NASA data.
+# The 30-cm ring-cusp gridded ion thruster that flew Deep Space 1 (1998) and Dawn (2007). Dawn
+# carried three and fired one at a time, so a Dawn vehicle mounts ONE of these in this model.
+# The rated point below is the top throttle level (TH15). Every figure in this file is from the
+# public source above; mass_kg and cost_musd are the only placeholders.
+isp_s: 3127.0
+thrust_mN: 92.7
+power_W: 2325.0
+mass_kg: 8.3            # thruster head only (the PPU is charged through the power chain)
+cost_musd: 5.0          # placeholder, not a quote
+propellant: xenon
+ppu_bus_side: high
+throughput_kg: 235      # xenon processed in the JPL Extended Life Test, engine still running
+lifetime_ignitions: null
+throttle_mode: continuous
+# Engine input power (W), thrust (mN), Isp (s) for throttle levels TH0..TH15, Table 9-2.
+power_curve:
+- {power_W: 518.0, thrust_mN: 20.7, isp_s: 1979.0}
+- {power_W: 659.0, thrust_mN: 24.6, isp_s: 2382.0}
+- {power_W: 749.0, thrust_mN: 27.5, isp_s: 2678.0}
+- {power_W: 908.0, thrust_mN: 32.1, isp_s: 2843.0}
+- {power_W: 1018.0, thrust_mN: 37.4, isp_s: 2942.0}
+- {power_W: 1123.0, thrust_mN: 42.6, isp_s: 3009.0}
+- {power_W: 1238.0, thrust_mN: 47.9, isp_s: 3065.0}
+- {power_W: 1344.0, thrust_mN: 52.7, isp_s: 3074.0}
+- {power_W: 1456.0, thrust_mN: 57.9, isp_s: 3115.0}
+- {power_W: 1579.0, thrust_mN: 63.2, isp_s: 3142.0}
+- {power_W: 1717.0, thrust_mN: 68.4, isp_s: 3184.0}
+- {power_W: 1845.0, thrust_mN: 73.6, isp_s: 3196.0}
+- {power_W: 1960.0, thrust_mN: 78.4, isp_s: 3181.0}
+- {power_W: 2077.0, thrust_mN: 83.1, isp_s: 3192.0}
+- {power_W: 2200.0, thrust_mN: 87.9, isp_s: 3164.0}
+- {power_W: 2325.0, thrust_mN: 92.7, isp_s: 3127.0}

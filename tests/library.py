@@ -49,11 +49,17 @@ def study_key() -> str:
 
 
 def mission_key() -> str:
-    """One mission key from the active library. Raises if the library ships none."""
+    """One plain rendezvous mission key from the active library (no gravity assist, no arrival
+    speed), so a test can bolt a return trip onto it. Raises if the library ships none."""
+    from prospector.config import load_mission
     keys = sorted(list_missions())
     if not keys:
         raise AssertionError("the active library ships no missions; tests need at least one")
-    return keys[0]
+    for key in keys:
+        m = load_mission(key)
+        if not m.gravity_assist and m.arrival_vinf_kms == 0:
+            return key
+    raise AssertionError("the active library ships no plain rendezvous mission")
 
 
 def curved_engine(key: str = "curved") -> tuple[str, Engine]:

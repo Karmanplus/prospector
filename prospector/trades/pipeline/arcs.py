@@ -180,6 +180,94 @@ def _mission_elements(rc, target_row) -> dict:
     return population.refresh_target_elements(dict(target_row), rc.mission.arrive_by)
 
 
+def _assemble_flyby(fsol, earth, flyby_body, target, target_a_au: float,
+                    scaled: ProgressFn, *, light: bool = False) -> tuple[dict, dict]:
+    """``sf`` and ``orbits`` blocks for a :class:`prospector.solvers.flyby.FlybySolution`, in a
+    direct leg's shape plus a ``flyby`` sub-block. Each leg is assembled on its own and joined
+    (leg two's times offset by leg one's flight time); ``orbits`` gains ``flyby_au`` /
+    ``flyby_track_au``."""
+    from types import SimpleNamespace
+    n1, n2 = fsol.leg_trajectories
+    caps = fsol.seg_caps or (None, None)
+    isps = fsol.seg_isp_s or (None, None)
+
+    def leg(nodes, isp_s, ms, mf, seg_caps, seg_isp_s):
+        tof = float(nodes[-1, 0] - nodes[0, 0])
+        dv = isp_s * 9.80665 * np.log(ms / mf) / 1000.0 if mf > 0 else float("nan")
+        return SimpleNamespace(
+            feasible=fsol.feasible, mismatch=fsol.mismatch, dep_mjd2000=float(nodes[0, 0]),
+            tof_days=tof, dv_kms=dv, initial_mass_kg=ms, final_mass_kg=mf, propellant_kg=ms - mf,
+            nseg=(nodes.shape[0] - 1) // 2, positions_au=nodes[:, 1:4] / pk.AU,
+            throttle=nodes[:, 8], trajectory=nodes, decision_vector=fsol.decision_vector,
+            isp_s=isp_s, thrust_N=fsol.thrust_N, max_duty_cycle=fsol.max_duty_cycle,
+            seg_caps=seg_caps, seg_isp_s=seg_isp_s, refresh_settled=fsol.refresh_settled)
+
+    fb_a_au = float(np.linalg.norm(flyby_body.eph(float(fsol.flyby_mjd2000))[0]) / pk.AU)
+    leg1 = leg(n1, fsol.isp_s[0], fsol.initial_mass_kg, fsol.flyby_mass_kg, caps[0], isps[0])
+    leg2 = leg(n2, fsol.isp_s[1], fsol.flyby_mass_kg, fsol.final_mass_kg, caps[1], isps[1])
+    b1, o1 = _assemble_leg(leg1, earth, flyby_body, 1.0, fb_a_au, scaled, light=light,
+                           blue_body=earth, blue_a_au=1.0, orange_body=target,
+                           orange_a_au=target_a_au)
+    b2, o2 = _assemble_leg(leg2, flyby_body, target, fb_a_au, target_a_au, scaled, light=light,
+                           blue_body=earth, blue_a_au=1.0, orange_body=target,
+                           orange_a_au=target_a_au)
+
+    def cat(key, offset=0.0):
+        a, b = np.asarray(b1[key]), np.asarray(b2[key])
+        if a.size == 0 and b.size == 0:
+            return a
+        return np.concatenate([a, b + offset]) if offset else np.concatenate([a, b])
+
+    tof1 = float(fsol.tof1_days)
+    block = dict(b1)
+    block.update({
+        "feasible": fsol.feasible, "mismatch": fsol.mismatch,
+        "dep_mjd2000": float(fsol.dep_mjd2000), "tof_days": float(fsol.tof_days),
+        "dv_kms": float(fsol.dv_kms), "initial_mass_kg": float(fsol.initial_mass_kg),
+        "final_mass_kg": float(fsol.final_mass_kg), "propellant_kg": float(fsol.propellant_kg),
+        "nseg": int(sum(fsol.nseg)),
+        "positions_au": cat("positions_au"), "throttle": cat("throttle"),
+        "node_thrust_vec": cat("node_thrust_vec"), "node_times_days": cat("node_times_days", tof1),
+        "fine_positions_au": cat("fine_positions_au"), "fine_times_days": cat("fine_times_days", tof1),
+        "fine_throttle": cat("fine_throttle"),
+        "node_a_au": cat("node_a_au"), "node_e": cat("node_e"), "node_i_deg": cat("node_i_deg"),
+        "node_thrust_radial": cat("node_thrust_radial"),
+        "node_thrust_transverse": cat("node_thrust_transverse"),
+        "node_thrust_normal": cat("node_thrust_normal"), "node_speed_kms": cat("node_speed_kms"),
+        "vinf_arr_kms": b2["vinf_arr_kms"], "target_speed_arr_kms": b2["target_speed_arr_kms"],
+        "seg_caps": (None if caps[0] is None else np.concatenate([np.asarray(c, float) for c in caps])),
+        "seg_isp_s": (None if isps[0] is None else np.concatenate([np.asarray(c, float) for c in isps])),
+        # The one Isp that reproduces the two legs' propellant total from the total mass ratio.
+        "isp_s": float(fsol.dv_kms * 1000.0 / (9.80665 * np.log(fsol.initial_mass_kg / fsol.final_mass_kg)))
+        if fsol.final_mass_kg > 0 and fsol.dv_kms == fsol.dv_kms else float(fsol.isp_s[0]),
+        "trajectory": fsol.trajectory, "decision_vector": fsol.decision_vector,
+        "flyby": {
+            "body": fsol.flyby_name, "mjd2000": float(fsol.flyby_mjd2000),
+            "tof1_days": tof1, "tof2_days": float(fsol.tof2_days),
+            "mass_kg": float(fsol.flyby_mass_kg),
+            "vinf_kms": float(fsol.flyby["vinf_kms"]), "turn_deg": float(fsol.flyby["turn_deg"]),
+            "periapsis_alt_km": float(fsol.flyby["periapsis_alt_km"]),
+            "min_periapsis_alt_km": float(fsol.flyby["min_periapsis_alt_km"]),
+            "leg_isp_s": [float(v) for v in fsol.isp_s],
+            "leg_propellant_kg": [float(fsol.initial_mass_kg - fsol.flyby_mass_kg),
+                                  float(fsol.flyby_mass_kg - fsol.final_mass_kg)],
+        },
+    })
+    orbits = {}
+    if not light:
+        abs_times = fsol.dep_mjd2000 + block["fine_times_days"]
+        period = 365.25 * fb_a_au ** 1.5
+        orbits = {"earth_au": o1["earth_au"],
+                  "target_au": _sample_orbit(target, fsol.dep_mjd2000,
+                                             365.25 * float(target_a_au) ** 1.5),
+                  "earth_track_au": _track(earth, abs_times),
+                  "target_track_au": _track(target, abs_times),
+                  "flyby_au": _sample_orbit(flyby_body, fsol.dep_mjd2000, period),
+                  "flyby_track_au": _track(flyby_body, abs_times),
+                  "flyby_name": fsol.flyby_name}
+    return block, orbits
+
+
 def _assemble_leg(sol, depart_body, arrive_body, depart_a_au: float, arrive_a_au: float,
                   scaled: ProgressFn, *, blue_body=None, blue_a_au=None,
                   orange_body=None, orange_a_au=None, light: bool = False) -> tuple[dict, dict]:

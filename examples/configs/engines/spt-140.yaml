@@ -1,0 +1,27 @@
+name: SPT-140 (Psyche)
+source: >-
+  public: Rated point: JPL Psyche press-kit quick facts (one thruster on at a time, up to 240 mN;
+  0.9-4.5 kW discharge from IEPC-2019-192) with the Isp that 240 mN at the plotted 14 mg/s flow
+  implies. Throttle shape: Oh et al., "Development of the Psyche Mission for NASA's Discovery
+  Program", IEPC-2019-192, Fig. 16 (thrust and flow vs PPU input power, read off the plot, so the
+  lower points are approximate). The 280 mN / 1800 s in vendor material is the commercial rating.
+# The Fakel/Maxar Hall thruster on Psyche (2023), the first Hall thruster flown beyond cislunar
+# space. Psyche mounts four and fires one at a time in cruise, so the Psyche vehicle mounts ONE.
+# Power is discharge power into the thruster (the PPU is charged through the power chain).
+isp_s: 1750.0
+thrust_mN: 240.0
+power_W: 4500.0
+mass_kg: 8.5            # thruster head; approximate
+cost_musd: 5.0          # placeholder, not a quote
+propellant: xenon
+ppu_bus_side: high
+throughput_kg: 500      # xenon processed in the extended life test (IEPC-2019-192)
+lifetime_ignitions: null
+throttle_mode: continuous
+# Low end measured by Snyder and Hofer, "Throttled Performance of the SPT-140 Hall Thruster"
+# (50 mN, 1250 s total Isp at 0.8 kW discharge); middle read from IEPC-2019-192 Fig. 16 and
+# rounded; top is the flight limit (the qualification unit measured 281 mN, 1820 s at 4.5 kW).
+power_curve:
+- {power_W: 800.0, thrust_mN: 50.0, isp_s: 1250.0}
+- {power_W: 3000.0, thrust_mN: 175.0, isp_s: 1650.0}
+- {power_W: 4500.0, thrust_mN: 240.0, isp_s: 1750.0}

@@ -487,3 +487,22 @@ def test_leg_terms_are_json_safe_lists_from_the_solution():
 
     assert G.leg_terms(Bare()) == {"seg_caps": None, "thrust_N": 0.1, "isp_s": 1500.0,
                                    "seg_isp_s": None}
+
+
+def test_the_polish_solves_against_the_orbit_the_cells_used(monkeypatch):
+    """The cells are solved against the target's orbit re-osculated at the arrival era; the polish
+    must be too, or its vector misses when a click rebuilds it against the stored row (measured
+    4e-3 on Didymos, three years of drift)."""
+    rc = config.default_resolved()
+    _stub(monkeypatch, lambda d, t: True)
+    out = G.lowthrust_grid(rc, {"pdes": "X", "full_name": "X"}, n_dep=2, n_tof=2, workers=1)
+    monkeypatch.setattr(G, "_mission_elements", lambda rc_, row: {**row, "osculated": "arrival"})
+    seen = []
+
+    def capture(args):
+        seen.append(args[1])
+        return None
+
+    monkeypatch.setattr(G, "_polish", capture)
+    G.polish_best_per_flight_time(rc, {"pdes": "X", "full_name": "X"}, out, workers=1)
+    assert seen and all(row.get("osculated") == "arrival" for row in seen)

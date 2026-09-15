@@ -1,6 +1,7 @@
 # Sizing and cost coefficients for the EXAMPLE library. Every number here is a neutral placeholder
 # at a plausible order of magnitude, not a measurement or a quote. An installation replaces this
-# file with its own coefficients; nothing in source depends on these values.
+# file with its own coefficients; nothing in source depends on these values. This is the "default"
+# build-model profile; a study can name another file in this directory instead (Study.build_model).
 #
 # Power budget (worst operating mode sizes the array).
 housekeeping_W: 165.0

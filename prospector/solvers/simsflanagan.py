@@ -58,8 +58,7 @@ _MATCHPOINT_CUT = 0.5
 # not to express a design limit: at 3000 s it works out to a cruise delta-v of 68 km/s, ten times
 # anything solved here, so it can never bite and can never reject a trip that works.
 _MF_FLOOR_FRACTION = 0.1
-# A floor under the mass the midpoint chain divides by, so an absurd Isp or a runaway throttle
-# during a search produces a nonsense (rejected) point rather than a division by zero.
+# Floor under the mass the chain divides by; an absurd Isp mid-search rejects rather than divides by zero.
 _MASS_FLOOR_KG = 1e-6
 
 # How far apart the two halves may end up and still count as having met. The solver's own
@@ -69,14 +68,10 @@ _MASS_FLOOR_KG = 1e-6
 # is a loose test, around 1.5e5 km of position. A converged solve lands two or three orders of
 # magnitude inside it.
 MISMATCH_TOL = 1e-3
-# How far a segment's throttle may sit above the ceiling its own path implies and still count as
-# respecting it (a fraction of the leg's maximum thrust). The ceiling is a constraint inside the
-# solve, so a converged answer sits within the solver's own tolerance of it; this is the looser
-# test a rebuilt or stored answer is judged by. Two percent is well inside what a constant-thrust
-# segment approximates anyway.
+# Throttle excess over the ceiling a rebuilt or stored answer may show (fraction of leg thrust);
+# the in-solve constraint holds tighter. 2% is inside what a constant-thrust segment approximates.
 CAP_TOL = 0.02
-# How far the leg's Isp may move between the value it was optimized at and the value its own path
-# implies before the Isp pass re-solves for it (a fraction).
+# Relative Isp change between the value optimized at and the path's own before the Isp pass re-solves.
 ISP_TOL = 0.002
 # Earth's tilt. PyKEP works relative to Earth's orbit, but the departure directions launch can
 # reach are limited relative to Earth's equator, since the spiral's plane has a fixed tilt to it.
@@ -97,23 +92,16 @@ class _LowThrustUDP:
     a real launch brings: an arrival deadline, per-segment thrust limits from the array model, and
     a limit on which departure directions launch can reach.
 
-    The thrust limit comes in two forms. ``seg_caps`` is one fixed ceiling per segment, used to
-    rebuild a stored answer under exactly the ceilings it was found under. ``cap_fn`` is the
-    ceiling as a function of distance from the Sun (a :class:`SmoothCap`), applied to each
-    segment as the MEAN of the ceiling over six points along the chords between the segment's
-    start, midpoint and end (``sunpower.CHORD_WEIGHTS``, the same points the exact ceiling is
-    judged at afterwards): a segment's kick stands for the thrust integrated over the segment, so
-    the impulse it may carry is what the array averages over that arc, not what it makes at one
-    instant. That makes the ceiling part of the problem: as the optimizer moves the
-    path sunward the ceiling rises with it, and the answer respects the power its own path has by
-    construction, in one solve. Its derivative follows the nodes through the propagation chain
-    (:meth:`_segment_nodes`), using the state-transition matrices the propagator returns, so
-    nothing here is a finite difference.
+    The thrust limit is either ``seg_caps`` (one fixed ceiling per segment, for rebuilding a
+    stored answer) or ``cap_fn`` (a :class:`SmoothCap` against distance from the Sun), applied per
+    segment as the mean over the ``sunpower.CHORD_WEIGHTS`` sample points, so the ceiling moves
+    with the path inside the solve. Its gradient runs through the propagation chain's
+    state-transition matrices (:meth:`_segment_nodes`); nothing here is a finite difference.
     """
 
     def __init__(self, target, mass_kg, thrust_N, isp_s, nseg, t0_bounds, tof_bounds,
                  vinf_dep_kms, vinf_arr_kms, arrive_mjd2000=None, max_dep_decl_deg=None,
-                 depart_body=None, seg_caps=None, cap_fn=None):
+                 depart_body=None, seg_caps=None, cap_fn=None, vinf_dep_exact=False):
         # The departure body is Earth going out and the asteroid coming back. Both are passed in as
         # bodies, so there is never a placeholder to get wrong.
         self.base = pk.trajopt.sf_pl2pl(
@@ -149,6 +137,9 @@ class _LowThrustUDP:
         self.max_dep_decl_deg = decl
         self._sin2_decl = None if decl is None else math.sin(math.radians(decl)) ** 2
         self._vinf2_ms2 = max((float(vinf_dep_kms) * 1000.0) ** 2, 1.0)
+        # A launcher delivers its departure speed exactly; a spiral buys up to it. Exact adds the
+        # lower side of the speed bound as a second inequality.
+        self.vinf_dep_exact = bool(vinf_dep_exact)
         self._nseg = int(nseg)
         self._i_tof = 8 + 3 * int(nseg)
         # Per-segment throttle limits from the array model: further from the Sun the array makes
@@ -170,37 +161,24 @@ class _LowThrustUDP:
                           if cap_fn is not None else [])
         self._cache_key = None
         self._cache = None
-        # Whether the last evaluation found the ceiling flat (zero slope) at every sample, in which
-        # case its gradient is the throttle term alone and the next evaluation can skip the
-        # state-transition matrices. A leg starts on the full chain; a power-rich leg moves to the
-        # light path at its first flat evaluation and stays there; one that ever meets a sloped
-        # sample gives the light path up for good, since a leg that flips between the two would
-        # walk the chain twice at every such point.
+        # Ceiling flat (zero slope) at every sample last time: the next gradient can skip the STMs.
+        # A leg that ever meets a sloped sample gives the light path up for good (flipping would
+        # walk the chain twice at every such point).
         self._flat = False
         self._light_ok = True
 
     # -- the segment midpoints, and how they move with the decision vector ----------------
 
     def _segment_nodes(self, x, jacobian: bool = True):
-        """Each segment's start, midpoint and end positions (m) and their Jacobians against the
-        decision vector.
+        """Each segment's start, midpoint and end positions (m) and their Jacobians against ``x``.
 
-        Returns ``(P, J)``: ``P`` is ``(nseg, 3, 3)`` (segment, node, xyz) and ``J`` is ``(nseg, 3,
-        3, dim)``, or None when ``jacobian`` is False, which walks the same chain without the
-        state-transition matrices at a fraction of the cost (see :meth:`_cap_fn_rows`). A forward
-        segment's end and a backward segment's start are the states its own
-        half of the chain reaches, so at the cut the two halves each carry their own. The chain is
-        the one :func:`_leg_nodes` walks, forward from departure to the cut and backward from arrival,
-        carrying alongside each state its sensitivity ``D = ds/dx`` (6 x dim) and the mass's
-        ``dm/dx``. A Lagrangian propagation over a duration contributes its state-transition
-        matrix on ``D`` plus the end state's time derivative times how the duration depends on the
-        flight time; a kick adds ``c u / m`` to the velocity, whose derivative runs through the
-        throttle, the flight time (the kick lasts a segment) and the mass; the mass update follows
-        the rocket equation. Departure and arrival states move with ``t0`` and ``tof`` at the
-        bodies' velocity and two-body acceleration, as PyKEP's own gradient does.
-
-        The propagator itself costs a microsecond a call; what this loop spends is Python, so it
-        is written for few array operations rather than for elegance.
+        Returns ``(P, J)``: ``P`` is ``(nseg, 3, 3)`` (segment, node, xyz), ``J`` is
+        ``(nseg, 3, 3, dim)`` or None when ``jacobian`` is False (same chain, no STMs, a fraction
+        of the cost). The chain is :func:`_leg_nodes`'s, carrying ``D = ds/dx`` (6 x dim) and
+        ``dm/dx``: a propagation applies its STM plus the end state's time derivative times the
+        duration's dependence on ``tof``; a kick adds ``c u / m`` with derivatives through the
+        throttle, ``tof`` and the mass; body states move with ``t0``/``tof`` at velocity and
+        two-body acceleration. Written for few array operations: the cost is Python, not the propagator.
         """
         nseg, base = self._nseg, self.base
         dim = len(x)
@@ -344,8 +322,8 @@ class _LowThrustUDP:
         return P
 
     def segment_caps(self, x) -> np.ndarray | None:
-        """The ceiling each segment is under at ``x``, as a fraction of the thrust this problem
-        flies: the fixed ``seg_caps``, or ``cap_fn`` read at the midpoints. None without either."""
+        """Each segment's ceiling at ``x`` (fraction of the thrust flown): the fixed ``seg_caps``,
+        or the chord-mean of ``cap_fn``. None without either."""
         if self.cap_fn is not None:
             P, _J = self._segment_nodes(x, jacobian=False)
             pts = CHORD_WEIGHTS @ P                                       # (n, S, 3)
@@ -354,18 +332,14 @@ class _LowThrustUDP:
         return self.seg_caps
 
     def _cap_fn_rows(self, x, gradient: bool = True):
-        """``|u_i|^2 - capbar_i(x)^2 <= 0`` per segment, ``capbar`` the mean ceiling over the
-        segment's chord samples, and (with ``gradient``) the rows' gradient entries in the order
-        :meth:`_cap_fn_columns` declares them, flat, else None. Cached on ``x``: pygmo asks for
-        the fitness and the gradient several times at one point, and a fitness-only point (a line
-        search, a perturbed retry) walks the chain without its sensitivities."""
+        """``|u_i|^2 - capbar_i(x)^2 <= 0`` per segment (``capbar`` the mean ceiling over the chord
+        samples) and, with ``gradient``, the sparse gradient entries in :meth:`_cap_fn_columns`
+        order. Cached on ``x``: pygmo asks for fitness and gradient several times at one point."""
         xa = np.asarray(x, float)
         key = xa.tobytes()
         if key == self._cache_key and (self._cache[1] is not None or not gradient):
             return self._cache
-        # Where the ceiling is flat at every sample its gradient is the throttle term alone, and
-        # the chain need only supply positions. Try the light path when the last point was flat;
-        # fall back to the full chain the moment a sample has slope.
+        # Flat ceiling at every sample: gradient is the throttle term alone, positions suffice.
         light = not gradient or (self._light_ok and self._flat)
         P, J = self._segment_nodes(xa, jacobian=not light)               # (n,3,3), (n,3,3,dim)
         S = CHORD_WEIGHTS @ P                                           # (n,S,3) chord samples
@@ -386,12 +360,9 @@ class _LowThrustUDP:
         if flat:
             G = np.zeros((self._nseg, xa.size))
         else:
-            # The chord samples are linear in the nodes, so their Jacobians are the same
-            # combinations. d(-capbar^2)/dx = -2 capbar (1/N) sum_s cap'(r_s) dr_s/dx, with
-            # dr_s/dx = (p_s . dp_s/dx)/r_s.
+            # d(-capbar^2)/dx = -2 capbar (1/N) sum_s cap'(r_s) dr_s/dx, dr_s/dx = (p_s . dp_s/dx)/r_s;
+            # the samples are linear in the nodes, so JS is the same combination of J.
             n, ns = self._nseg, CHORD_WEIGHTS.shape[0]
-            # (n,S,3,dim): the chord samples' Jacobians, then p_s . dp_s/dx summed over xyz, then
-            # the weighted sum over the samples, all as matmuls.
             JS = (CHORD_WEIGHTS @ J.reshape(n, 3, 3 * xa.size)).reshape(n, ns, 3, xa.size)
             w = slope_s / (np.maximum(r_s, 1.0) * pk.AU)                # (n,S)
             pj = (S[:, :, :, None] * JS).sum(axis=2)                    # (n,S,dim): p_s . dp_s/dx
@@ -403,10 +374,8 @@ class _LowThrustUDP:
         return vals, grad
 
     def _cap_fn_columns(self, i) -> list[int]:
-        """Which variables segment ``i``'s midpoint can depend on, in increasing order: the
-        departure epoch, the flight time, the departure (forward) or arrival (backward) excess
-        velocity and final mass, and the throttles of the segments walked through to reach it
-        plus its own (for the ``|u_i|^2`` term)."""
+        """Variables segment ``i`` depends on, increasing: epoch, the half's excess velocity (and
+        final mass, backward), the throttles walked through plus its own, flight time."""
         if i < self._nseg_fwd:
             cols = [_I_T0, 2, 3, 4]
             cols += list(range(_I_THROTTLE0, _I_THROTTLE0 + 3 * (i + 1)))
@@ -456,6 +425,9 @@ class _LowThrustUDP:
             f.extend(self._cap_fn_rows(x, gradient=False)[0])
         if self._sin2_decl is not None:
             f.append(self._declination_violation(x))
+        if self.vinf_dep_exact:
+            v = np.asarray(x[_I_VINF_DEP], float)
+            f.append((self._vinf2_ms2 - float(v @ v)) / self._vinf2_ms2)
         return f
 
     def get_bounds(self):
@@ -470,7 +442,8 @@ class _LowThrustUDP:
     def get_nic(self):
         return (self.base.get_nic() + (1 if self.arrive_mjd2000 is not None else 0)
                 + (self._nseg if (self.seg_caps is not None or self.cap_fn is not None) else 0)
-                + (1 if self._sin2_decl is not None else 0))
+                + (1 if self._sin2_decl is not None else 0)
+                + (1 if self.vinf_dep_exact else 0))
 
     def has_gradient(self):
         return True
@@ -497,6 +470,9 @@ class _LowThrustUDP:
                 row += 1
         if self._sin2_decl is not None:
             rows.append((row, [2, 3, 4]))
+            row += 1
+        if self.vinf_dep_exact:
+            rows.append((row, [2, 3, 4]))
         return rows
 
     def gradient_sparsity(self):
@@ -522,6 +498,8 @@ class _LowThrustUDP:
             g.extend((k * (-s2 * vx),
                       k * (vz_eq * _SIN_EPS - s2 * vy),
                       k * (vz_eq * _COS_EPS - s2 * vz)))
+        if self.vinf_dep_exact:
+            g.extend(-2.0 * float(v) / self._vinf2_ms2 for v in x[_I_VINF_DEP])
         return g
 
 
@@ -630,13 +608,10 @@ class SimsFlanaganSolution:
     # these, so the propellant total is right; these say where along the way it was spent at
     # what efficiency. None when no array model was applied.
     seg_isp_s: np.ndarray | None = None
-    # One entry per Isp pass: the leg Isp before and after, and the final mass before and after
-    # the pass. Diagnostics; None for a solve without an array model.
+    # One entry per Isp pass (Isp and final mass before/after). Diagnostics; None without an array model.
     refresh_log: list | None = None
-    # Whether the answer's leg Isp agrees with the Isp its own path implies (within ISP_TOL). The
-    # thrust ceilings are part of the problem, so a converged answer respects them by
-    # construction; the Isp is the one term settled after the fact. False means the passes ran
-    # out first, so the propellant total is priced at a slightly wrong Isp.
+    # Leg Isp agrees with its own path's within ISP_TOL. False: the passes ran out, so the
+    # propellant total is priced at a slightly wrong Isp. (Ceilings hold by construction.)
     refresh_settled: bool = True
 
     @property
@@ -669,7 +644,7 @@ class SimsFlanaganSolution:
 def _make_udp(target, *, mass_kg, thrust_N, isp_s, nseg, launch_window, arrive_by,
               vinf_dep_kms, vinf_arr_kms, window_slack_days, min_tof_days,
               max_tof_days, max_duty_cycle, max_dep_decl_deg, depart_body=None,
-              seg_caps=None, cap_fn=None) -> _LowThrustUDP:
+              seg_caps=None, cap_fn=None, vinf_dep_exact=False) -> _LowThrustUDP:
     """The fully bounded problem for one solve. Shared by :func:`solve` and
     :func:`rebuild_solution`, so a stored solution rebuilds against the same bounds and
     constraints it was optimized under.
@@ -700,7 +675,8 @@ def _make_udp(target, *, mass_kg, thrust_N, isp_s, nseg, launch_window, arrive_b
     return _LowThrustUDP(target, mass_kg, thrust_used, isp_s, nseg,
                          (t0_lo, t0_hi), tof_bounds, vinf_dep_kms, vinf_arr_kms,
                          arrive_mjd2000=arrive_mjd, max_dep_decl_deg=max_dep_decl_deg,
-                         depart_body=depart_body, seg_caps=seg_caps, cap_fn=cap_fn)
+                         depart_body=depart_body, seg_caps=seg_caps, cap_fn=cap_fn,
+                         vinf_dep_exact=vinf_dep_exact)
 
 
 def solve(
@@ -724,6 +700,7 @@ def solve(
     max_duty_cycle: float = 1.0,
     max_dep_decl_deg: float | None = None,
     depart_body=None,
+    vinf_dep_exact: bool = False,
     thrust_cap_fn=None,
     seg_isp_fn: Callable | None = None,
     isp_iters: int = 2,
@@ -761,18 +738,14 @@ def solve(
     leaves in the plane of the spiral, so this belongs to launch; without it the optimizer aims out
     of a plane the escape cannot reach. None, or 90 or more, leaves it free.
 
-    ``thrust_cap_fn`` maps distance from the Sun (AU) to the thrust the array can power there, as a
-    fraction of ``thrust_N``. It is applied INSIDE the solve, at each segment's midpoint, as a
-    constraint the optimizer differentiates (a :class:`SmoothCap`; any other callable is smoothed
-    into one), so the answer respects the power its own path has, in one solve, and the optimizer
-    is free to move the path sunward to buy thrust. It multiplies with ``max_duty_cycle``. None
-    leaves a single flat limit.
+    ``thrust_cap_fn`` maps distance from the Sun (AU) to the available thrust as a fraction of
+    ``thrust_N``, applied inside the solve as a differentiable per-segment constraint (a
+    :class:`SmoothCap`; any other callable is smoothed into one). Multiplies with
+    ``max_duty_cycle``; None leaves a single flat limit.
 
-    ``seg_isp_fn`` maps a trajectory's node positions (metres, ``2*nseg+1`` rows) to the Isp each
-    segment runs at. The leg is optimized at one Isp, so after the solve the throttle-weighted mean
-    of those is compared with the Isp the leg used; if they differ by more than ``ISP_TOL`` the
-    leg is re-solved from its own answer at the new Isp, up to ``isp_iters`` times. The Isp only
-    moves a percent or two once the path is known, so one pass is the norm.
+    ``seg_isp_fn`` maps node positions (metres, ``2*nseg+1`` rows) to each segment's Isp. After
+    the solve the throttle-weighted mean is compared with the leg Isp; beyond ``ISP_TOL`` the leg
+    is re-solved from its answer at the new Isp, up to ``isp_iters`` times (one pass is the norm).
     """
     cap = None
     if thrust_cap_fn is not None:
@@ -787,15 +760,15 @@ def solve(
                          vinf_dep_kms=vinf_dep_kms, vinf_arr_kms=vinf_arr_kms,
                          window_slack_days=window_slack_days, min_tof_days=min_tof_days,
                          max_tof_days=max_tof_days, max_duty_cycle=max_duty_cycle,
-                         max_dep_decl_deg=max_dep_decl_deg, depart_body=depart_body, cap_fn=cap)
+                         max_dep_decl_deg=max_dep_decl_deg, depart_body=depart_body, cap_fn=cap, vinf_dep_exact=vinf_dep_exact)
 
     udp = make(leg_isp)
     x_start = None
     if x0 is not None:
         # A solution from a neighbouring solve. It carries the expensive part, the throttle
         # history, which transfers across because a throttle is a fraction of its own segment
-        # rather than an absolute number. Only the date and flight time are moved. It also brings
-        # its own path, so the Isp it needs is read off that rather than off the 1 AU point.
+        # rather than an absolute number. Only the date and flight time are moved; the starting
+        # Isp is read off its path rather than the 1 AU point.
         x_start = _adapt_decision_vector(x0, udp)
         if seg_isp_fn is not None:
             traj0 = _leg_nodes(udp, x_start)
@@ -840,11 +813,9 @@ def solve(
         if progress is not None:
             progress(k + 1, total_rounds)
 
-    # The Isp pass. The leg was optimized at one Isp; its own path says what Isp each segment
-    # really runs at. If the throttle-weighted mean disagrees with the Isp used, re-solve from the
-    # answer at the new Isp: a plain local descent, since the answer is already feasible under
-    # the ceilings and only the mass bookkeeping moved. The best converged answer is kept in
-    # case a pass runs out of evaluations short of convergence.
+    # Isp pass: re-solve from the answer at the Isp its own path implies, a plain local descent
+    # (the answer is already feasible; only the mass bookkeeping moved). The best converged
+    # answer is kept in case a pass runs out of evaluations.
     kept = (udp, best_x, best, leg_isp, seg_isps) if best[0] else None
     refresh_log: list = []
     settled = True
@@ -887,8 +858,7 @@ def solve(
         udp, best_x, best, leg_isp, seg_isps = kept
         restored = True
     if isp_rounds and (restored or not (settled and best[0])):
-        # The passes ran out, or the answer returned is an earlier round's: judge THAT answer's
-        # Isp against its own path.
+        # Passes ran out, or an earlier round's answer is returned: judge that answer's Isp.
         traj = _leg_nodes(udp, best_x)
         end_isps = seg_isp_fn(traj[:, 1:4])
         if end_isps is not None:
@@ -928,17 +898,10 @@ def _perihelion_au(body, mjd2000: float) -> float | None:
 
 
 def _leg_power_terms(rc, bodies, available_power_W=None, array_model=None, *, when_mjd2000=None):
-    """The thrust, Isp and per-segment limits a config's array implies for one leg.
-
-    Returns ``{thrust_N, isp_s, thrust_cap_fn, seg_isp_fn}`` for :func:`solve` (see
-    :mod:`prospector.solvers.sunpower` for the model). ``thrust_N`` is the most the leg can ever
-    use: the operating point at the closest approach to the Sun the leg can make, taken as the
-    smaller perihelion of the two ``bodies`` it flies between (never further in than 1 AU's worth
-    of margin, never inside the model's floor). ``isp_s`` is the 1 AU operating point, the Isp the
-    solve starts at before its own path says better. ``thrust_cap_fn`` is the ceiling against
-    distance the solve applies inside the problem, and ``seg_isp_fn`` the Isp each segment of a
-    path runs at. With no array model to apply, the rated point and no limits.
-    """
+    """``{thrust_N, isp_s, thrust_cap_fn, seg_isp_fn}`` for :func:`solve` from a config's array
+    (:mod:`prospector.solvers.sunpower`). ``thrust_N`` is the operating point at the smaller
+    perihelion of the two ``bodies`` (clamped to the model's range); ``isp_s`` the 1 AU starting
+    Isp. Without an array model: the rated point and no limits."""
     rated = {"thrust_N": rc.total_thrust_mN * 1e-3, "isp_s": rc.effective_isp,
              "thrust_cap_fn": None, "seg_isp_fn": None}
     model = sun_power_model(rc, available_power_W, array_model)
@@ -949,9 +912,8 @@ def _leg_power_terms(rc, bodies, available_power_W=None, array_model=None, *, wh
     r_min = min((v for v in q if v is not None), default=None)
     thrust_N = model.leg_thrust_N(r_min)
     if thrust_N <= 0.0:
-        # The array cannot run the stack even at the leg's closest approach. The leg keeps the
-        # rated numbers as its basis and the ceiling is zero everywhere, so the solve fails to
-        # converge and says so, rather than quietly flying a cruise on power it does not have.
+        # Array cannot run the stack even at closest approach: rated basis, zero ceiling, so the
+        # solve fails to converge and says so.
         thrust_N = model.rated_thrust_N
         return {"thrust_N": thrust_N, "isp_s": model.rated_isp_s,
                 "thrust_cap_fn": model.smooth_cap(0.0),
@@ -962,9 +924,8 @@ def _leg_power_terms(rc, bodies, available_power_W=None, array_model=None, *, wh
 
 
 def _pop_power_kwargs(kwargs):
-    """Take the power-model terms out of a solver kwargs dict: the at-thruster power at 1 AU, the
-    array physics, and any stored leg terms (``thrust_N``, ``isp_s``, ``seg_isp_s``) a rebuild
-    has to reproduce rather than derive."""
+    """Pop the power-model terms from a solver kwargs dict: ``available_power_W``, ``array_model``
+    and any stored leg terms (``thrust_N``, ``isp_s``, ``seg_isp_s``) a rebuild reproduces."""
     return (kwargs.pop("available_power_W", None), kwargs.pop("array_model", None),
             {k: kwargs.pop(k) for k in ("thrust_N", "isp_s", "seg_isp_s") if k in kwargs})
 
@@ -979,14 +940,11 @@ def solve_for_config(rc, target, *, progress=None, **kwargs) -> SimsFlanaganSolu
     provides the escape. The departure direction is limited to what the launch type can reach by
     default; pass ``max_dep_decl_deg`` to widen it when the spiral is allowed to steer its plane.
 
-    In cruise the array is clear of the radiation belts, so its degradation holds at whatever the
-    escape left it with (``available_power_W``, the at-thruster power at 1 AU; None means the
-    start-of-life array), and only the distance from the Sun still moves its output. The engines
-    follow that power along their throttle curve, up as well as down: more thrust and a higher
-    Isp inside 1 AU, up to the rated point, less outside (:func:`_leg_power_terms`), and the
-    ceiling that implies is part of the problem the optimizer solves. Pass ``thrust_cap_fn=None``
-    to switch the power model off, or a function of sun distance to use one of your own at the 1 AU
-    operating point; ``array_model`` selects particular array physics.
+    ``available_power_W`` is the post-escape at-thruster power at 1 AU (None: start-of-life
+    array); the engines follow the Sun-distance power along their throttle curve, up to the rated
+    point (:func:`_leg_power_terms`), as a constraint inside the solve. ``thrust_cap_fn=None``
+    switches the power model off; a function of sun distance replaces the ceiling at the 1 AU
+    operating point; ``array_model`` selects the array physics.
     """
     kwargs.setdefault("max_dep_decl_deg", max_departure_declination_deg(rc.launch))
     # The window and deadline come from the config but can be overridden, because a grid cell holds
@@ -994,6 +952,8 @@ def solve_for_config(rc, target, *, progress=None, **kwargs) -> SimsFlanaganSolu
     # vehicle numbers through this function rather than working them out again.
     kwargs.setdefault("launch_window", rc.departure_window)
     kwargs.setdefault("arrive_by", rc.mission.arrive_by)
+    kwargs.setdefault("vinf_arr_kms", rc.arrival_vinf_kms)
+    kwargs.setdefault("vinf_dep_exact", bool(rc.launch.escape_provided))
     available_power_W, array_model, _stored = _pop_power_kwargs(kwargs)
     terms = _leg_terms_for_call(rc, (lb.earth_planet(), target), available_power_W, array_model,
                                 kwargs)
@@ -1007,9 +967,8 @@ def solve_for_config(rc, target, *, progress=None, **kwargs) -> SimsFlanaganSolu
 
 
 def _leg_terms_for_call(rc, bodies, available_power_W, array_model, kwargs) -> dict:
-    """The ``thrust_N / isp_s / thrust_cap_fn / seg_isp_fn`` for a solve, honouring an explicit
-    ``thrust_cap_fn`` in ``kwargs``: None switches the power model off (rated point, no limits);
-    a function keeps the frozen 1 AU operating point and applies that function alone."""
+    """The leg terms for a solve, honouring an explicit ``thrust_cap_fn`` in ``kwargs``: None
+    means the rated point and no limits; a function is applied alone at the 1 AU operating point."""
     when = lb.mjd2000_from_date(kwargs["launch_window"][0])
     if "thrust_cap_fn" in kwargs:
         cap_fn = kwargs.pop("thrust_cap_fn")
@@ -1025,51 +984,22 @@ def _leg_terms_for_call(rc, bodies, available_power_W, array_model, kwargs) -> d
 def solve_cell_for_config(rc, target, *, dep_mjd2000: float, tof_days: float,
                           x0=None, tol_days: float = 0.75, restarts: int = 1,
                           nseg: int = 12, **kwargs) -> SimsFlanaganSolution:
-    """One grid cell: the same cruise solve as :func:`solve_for_config`, but with the departure
-    date and the flight time held fixed instead of searched.
+    """One grid cell: :func:`solve_for_config` with the departure date and flight time held within
+    ``tol_days`` (0.75: a pinned bound conditions worse than a narrow one, and it sits well inside
+    a grid's spacing).
 
-    Holding them fixed is what makes a grid affordable. Those two variables are where the free
-    solve struggles most, because a trip can work at many departure timings and many flight times
-    and the optimizer spends most of its restarts choosing between them. Fixing both leaves only
-    the throttle history to find, which one restart usually manages. It is also what makes the
-    answer a cell at all: the caller wants this departure at this duration, not the best one
-    nearby.
-
-    ``tol_days`` is how much slack the fixed values get. It is not zero, because a bound pinned to
-    a single value is worse conditioned than a narrow one, and 0.75 days sits well inside a grid's
-    own spacing.
-
-    ``x0`` starts from a neighbouring cell's solution, which is what turns a grid from a set of
-    independent solves into a sweep: the throttle history carries across and only the date and
-    duration change. It has to come from a solve at the same ``nseg``; see
-    :func:`_adapt_decision_vector` for why re-sampling one is a hazard.
-
-    Starting from a neighbour inherits where the neighbour ended up as well as its throttles, and
-    one restart is not always enough to get away from it. Measured on Apophis at a 400-day flight
-    time, starting a cell from a neighbour ten days away: 3.2445 km/s at ``restarts=1`` against
-    3.0194 from scratch, then 3.2059 at 2, 3.0187 at 4 and 2.9925 at 8. So four restarts recovers
-    the from-scratch answer and eight beats it, for about 1.3 s. That is why ``restarts`` defaults
-    low here, for a caller that just wants a quick does-it-work sweep; a grid quoting delta-v
-    should pass 4 or more, since below that a cell reports its neighbour's answer rather than its
-    own.
-
-    A cell that does not converge reports ``feasible=False``, which means the search found no
-    trajectory at this effort, not that the cell cannot be flown. Only the optimizer converging
-    supports either claim, and a grid that showed the two the same way would reject reachable
-    targets, which is the failure this solver exists to prevent.
+    ``x0`` warm-starts from a neighbouring cell at the same ``nseg`` (see
+    :func:`_adapt_decision_vector`). A warm start inherits the neighbour's basin: measured on
+    Apophis at 400 days from a neighbour ten days away, 3.2445 km/s at ``restarts=1`` vs 3.0194
+    from scratch, 3.2059 at 2, 3.0187 at 4, 2.9925 at 8 (~1.3 s). A grid quoting delta-v should
+    pass 4 or more. ``feasible=False`` means no trajectory found at this effort, not that none exists.
     """
     half = max(0.05, float(tol_days))
-    # The solver only takes bounds as a date plus a slack, so the requested date is rounded to a
-    # whole day. A date with a fraction of a day on it cannot be expressed, and widening the slack
-    # to cover the rounding pushes the bounds outside the launch window, which produces cells
-    # departing before the pad is available. Callers that care, such as a grid, put their dates on
-    # whole days a step inside each window edge, so the rounding changes nothing for them.
+    # Bounds are a date plus a slack, so the date is rounded to a whole day; widening the slack to
+    # cover a fraction would push the bounds outside the launch window.
     dep = lb.date_from_mjd2000(round(float(dep_mjd2000))).date()
-    # This function owns the fixed departure and duration, so the terms that define them come from
-    # ``tol_days`` rather than from the caller. A caller passing on a shared set of solver settings
-    # will be carrying its own window slack and flight-time bounds; letting those through would
-    # either collide, raising a TypeError that a pooled caller is apt to swallow as "this cell did
-    # not converge", or quietly unfix the cell it was asked to solve.
+    # The cell owns its window and flight-time bounds; a caller's shared settings would either
+    # collide (a TypeError a pooled caller swallows as non-convergence) or unfix the cell.
     for owned in ("launch_window", "window_slack_days", "min_tof_days", "max_tof_days"):
         kwargs.pop(owned, None)
     return solve_for_config(
@@ -1140,6 +1070,7 @@ def rebuild_solution(
     depart_body=None,
     seg_caps=None,
     seg_isp_s=None,
+    vinf_dep_exact: bool = False,
     **_ignored,
 ) -> SimsFlanaganSolution:
     """Rebuild a trajectory from a stored solution vector, with no optimizing.
@@ -1163,7 +1094,7 @@ def rebuild_solution(
                     window_slack_days=window_slack_days, min_tof_days=min_tof_days,
                     max_tof_days=max_tof_days, max_duty_cycle=max_duty_cycle,
                     max_dep_decl_deg=max_dep_decl_deg, depart_body=depart_body,
-                    seg_caps=udp_caps)
+                    seg_caps=udp_caps, vinf_dep_exact=vinf_dep_exact)
     name = getattr(target, "name", "target")
     return _build_solution(udp, _checked_decision_vector(x, udp), name, mass_kg, isp_s,
                            int(nseg), thrust_N, max_duty_cycle,
@@ -1208,6 +1139,8 @@ def rebuild_for_config(rc, target, x, **kwargs) -> SimsFlanaganSolution:
     # perfectly good vector whose date sits inside the range but outside a window edge.
     kwargs.setdefault("launch_window", rc.departure_window)
     kwargs.setdefault("arrive_by", rc.mission.arrive_by)
+    kwargs.setdefault("vinf_arr_kms", rc.arrival_vinf_kms)
+    kwargs.setdefault("vinf_dep_exact", bool(rc.launch.escape_provided))
     thrust_N, isp_s, seg_isp_s = _rebuild_leg_terms(rc, (lb.earth_planet(), target), kwargs)
     return rebuild_solution(
         target,
@@ -1221,10 +1154,9 @@ def rebuild_for_config(rc, target, x, **kwargs) -> SimsFlanaganSolution:
 
 
 def _rebuild_leg_terms(rc, bodies, kwargs) -> tuple[float, float, np.ndarray | None]:
-    """The thrust and Isp a stored vector is rebuilt against: the stored leg terms when the point
-    recorded them (``thrust_N``, ``isp_s``, ``seg_isp_s`` in ``kwargs``; the Isp a solve settles
-    on depends on its trajectory, so it has to travel with the vector), else the terms a fresh
-    solve would start from."""
+    """Thrust and Isp a stored vector is rebuilt against: the stored ``thrust_N`` / ``isp_s`` /
+    ``seg_isp_s`` when the point recorded them (the settled Isp depends on the trajectory), else
+    a fresh solve's starting terms."""
     available_power_W, array_model, stored = _pop_power_kwargs(kwargs)
     kwargs.pop("thrust_cap_fn", None)
     kwargs.pop("seg_isp_fn", None)
@@ -1286,7 +1218,13 @@ def _seed_decision_vector(seed, udp, mass_kg, nseg) -> np.ndarray:
         vz_eq = float(np.clip(vz_eq, -z_max, z_max))
         z[3] = vy_eq * _COS_EPS + vz_eq * _SIN_EPS      # equatorial -> ecliptic
         z[4] = -vy_eq * _SIN_EPS + vz_eq * _COS_EPS
-    # Arrival speed and throttles start at zero, which makes it a pure coasting guess.
+    # The arrival speed is the two-burn transfer's, clipped to the bound: for a rendezvous that is
+    # near zero and the guess is a pure coast; for a flyby or impactor the bound is wide and a
+    # zero here would leave the backward half propagating from the target's own velocity, a
+    # mismatch no descent recovers from (DART: 1.08 scaled, 24 kg of xenon to close a route the
+    # launcher flew ballistically). Throttles start at zero.
+    vinf_arr = seed.v_transfer_arr_ms - seed.v_arr_body_ms
+    z[_I_VINF_ARR] = np.clip(vinf_arr, lo[_I_VINF_ARR], hi[_I_VINF_ARR])
     return np.clip(z, lo, hi)
 
 
@@ -1360,9 +1298,8 @@ def _build_solution(udp, x, name, mass_kg, isp_s, nseg, thrust_N, max_duty_cycle
     # maximum thrust times reported throttle comes back out right.
     traj[:, 8:12] *= max_duty_cycle
     dv = isp_s * G0 * np.log(mass_kg / mf) / 1000.0 if mf > 0 else float("nan")
-    # The problem's limits are fractions of the thrust it flies; report them on the same basis as
-    # the throttle, fractions of maximum thrust, so the two can be drawn together. With a ceiling
-    # against distance, these are the ceilings the answer's own midpoints sit under.
+    # Ceilings on the throttle's basis (fractions of maximum thrust) so the two draw together;
+    # with a cap_fn these are the answer's own segments' ceilings.
     caps = udp.segment_caps(x)
     seg_caps = None if caps is None else np.asarray(caps, float) * float(max_duty_cycle)
     return SimsFlanaganSolution(

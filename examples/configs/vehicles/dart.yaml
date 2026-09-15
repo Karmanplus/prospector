@@ -1,0 +1,18 @@
+name: DART (2021)
+# NASA's DART as launched (final technical report, NASA/NTRS 20230015804): 615 kg at launch, 60 kg
+# of xenon for the ion-propulsion technology demonstration, 50 kg of hydrazine for the primary
+# chemical propulsion and attitude control (folded into the dry mass here), 579 kg at impact. The
+# 22 m^2 roll-out array made more than 6.6 kW at 1 AU when new (Redwire). The flown trajectory was
+# the launcher's, with the ion engine fired only as a demonstration, so this example shows a
+# direct non-rendezvous arrival, not a propellant comparison; the engine mounted is the public
+# NSTAR, since the demonstration engine's name is not in the example library.
+dry_mass: 555.0
+fuel_mass: 60.0
+unusable_prop: 3.0
+engines:
+- type: nstar
+  count: 1
+solar_power_W: 6600.0
+area_m2: 0.0
+propellant: null
+array_margin_pct: 0.0

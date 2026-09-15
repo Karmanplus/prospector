@@ -19,6 +19,7 @@ from prospector.figures.theme import (
     EARTH,
     EARTH_BLUE,
     ECCEN,
+    FLYBY_GREY,
     GRID,
     MUTED,
     PAUSE_AMBER,
@@ -31,16 +32,26 @@ from prospector.figures.theme import (
 )
 
 
-def _phase_transition_lines(fig: go.Figure, transitions) -> None:
+def _phase_transition_lines(fig: go.Figure, transitions, rows=(None,)) -> None:
     """Dashed vertical markers where one phase of the mission hands over to the next.
 
-    ``transitions`` is ``[(day, label), ...]`` on the figure's own clock. Every whole-mission
-    timeline uses this, so the boundaries look the same on every chart.
+    ``transitions`` is ``[(day, label), ...]`` or ``[(day, label, colour), ...]`` on the figure's
+    own clock; the default colour is the muted phase-seam grey, a gravity assist passes the
+    planet's. The label sits on the first of ``rows``.
     """
-    for day, label in transitions or ():
-        fig.add_vline(x=float(day), line=dict(color=MUTED, width=1.2, dash="dash"),
-                      annotation_text=str(label), annotation_position="top",
-                      annotation_font=dict(color=MUTED, size=10))
+    for day, label, *rest in transitions or ():
+        color = rest[0] if rest else MUTED
+        for k, row in enumerate(rows):
+            where = {} if row is None else {"row": row, "col": 1}
+            note = ({"annotation_text": str(label), "annotation_position": "top",
+                     "annotation_font": dict(color=color, size=10)} if k == 0 else {})
+            fig.add_vline(x=float(day), line=dict(color=color, width=1.2, dash="dash"),
+                          **note, **where)
+
+
+def flyby_marker(day, name: str):
+    """The transition tuple for a flyby at ``day`` on a chart's clock: the planet's colour."""
+    return (float(day), f"{name} flyby" if name else "flyby", FLYBY_GREY)
 
 
 def distance_profile(times_days, sc_pos_au, earth_pos_au, target_pos_au, *,
@@ -92,7 +103,8 @@ def trajectory_3d(fine_pos_au, fine_throttle, fine_days, node_days, node_throttl
                   dep_label="", arr_label="", target_name="", dv_kms=None, tof_days=None,
                   target_i_deg=None, node_pos_au=None, node_thrust_vec=None, node_rtn=None,
                   show_cones=False, animate=True, n_frames=60, controls=True,
-                  max_throttle_pct=None) -> go.Figure:
+                  max_throttle_pct=None, flyby_orbit_au=None, flyby_track_au=None,
+                  flyby_name="", flyby_day=None) -> go.Figure:
     """The converged low-thrust trajectory (AU) over a synced thrust profile, made readable.
 
     On top, the smoothed path coloured by throttle, red for coasting and green for full thrust,
@@ -143,6 +155,15 @@ def trajectory_3d(fine_pos_au, fine_throttle, fine_days, node_days, node_throttl
     fig.add_trace(go.Scatter3d(
         x=tgt[:, 0], y=tgt[:, 1], z=tgt[:, 2], mode="lines", name=f"{target_name} orbit",
         line=dict(color=ASTEROID_ORANGE, width=2), opacity=0.5, hoverinfo="skip"), row=1, col=1)
+    fb_track = None
+    if flyby_orbit_au is not None and len(flyby_orbit_au):
+        fbo = np.asarray(flyby_orbit_au, float)
+        fig.add_trace(go.Scatter3d(
+            x=fbo[:, 0], y=fbo[:, 1], z=fbo[:, 2], mode="lines",
+            name=f"{flyby_name or 'flyby body'} orbit",
+            line=dict(color=FLYBY_GREY, width=2), opacity=0.6, hoverinfo="skip"), row=1, col=1)
+    if flyby_track_au is not None and len(flyby_track_au) == len(fine):
+        fb_track = np.asarray(flyby_track_au, float)
     fig.add_trace(go.Scatter3d(
         x=[0], y=[0], z=[0], mode="markers+text", marker=dict(size=5, color="#ffd24a"),
         text=["Sun"], textposition="top center", textfont=dict(color="#ffd24a"),
@@ -216,11 +237,20 @@ def trajectory_3d(fine_pos_au, fine_throttle, fine_days, node_days, node_throttl
         fig.add_annotation(x=0.0, y=cap, text=label, showarrow=False,
                            xanchor="left", yanchor="bottom", font=dict(color=EARTH, size=10),
                            row=2, col=1)
+    # The flyby epoch on the thrust profile, as a trace for the same reason as the ceiling.
+    if flyby_day is not None:
+        fig.add_trace(go.Scatter(
+            x=[float(flyby_day)] * 2, y=[0.0, 105.0], mode="lines", hoverinfo="skip",
+            showlegend=False, name="flyby-mark",
+            line=dict(color=FLYBY_GREY, width=1.2, dash="dash")), row=2, col=1)
+        fig.add_annotation(x=float(flyby_day), y=105.0, text=f"{flyby_name or 'planet'} flyby",
+                           showarrow=False, xanchor="left", yanchor="top",
+                           font=dict(color=FLYBY_GREY, size=10), row=2, col=1)
 
     have_bodies = e_track.shape[0] == fine.shape[0] and t_track.shape[0] == fine.shape[0]
     if animate and fine.shape[0] > 2:
         _add_scrubber(fig, fine, days, thr, e_track, t_track, have_bodies, n_frames,
-                      controls=controls)
+                      controls=controls, fb_track=fb_track)
 
     bits = []
     if dv_kms is not None:
@@ -269,8 +299,9 @@ def trajectory_3d(fine_pos_au, fine_throttle, fine_days, node_days, node_throttl
 
 
 def _add_scrubber(fig, fine, days, thr, e_track, t_track, have_bodies, n_frames,
-                  controls=True) -> None:
-    """Add the moving spheres (3D, named ``scrub-sc`` / ``scrub-earth`` / ``scrub-ast``) + a
+                  controls=True, fb_track=None) -> None:
+    """Add the moving spheres (3D, named ``scrub-sc`` / ``scrub-earth`` / ``scrub-ast``, plus
+    ``scrub-fb`` for a gravity-assist body when ``fb_track`` is given) + a
     thrust-profile cursor (``scrub-cursor``). With ``controls=True`` it also builds the animation
     frames and Plotly's own Play button and slider. With ``controls=False`` only the markers are
     added and no frames, because something outside, namely the app's own mission timeline, moves
@@ -291,6 +322,9 @@ def _add_scrubber(fig, fine, days, thr, e_track, t_track, have_bodies, n_frames,
         fig.add_trace(_sphere(e_track[0], EARTH_BLUE, "scrub-earth"), row=1, col=1)
         moving.append(len(fig.data))
         fig.add_trace(_sphere(t_track[0], ASTEROID_ORANGE, "scrub-ast"), row=1, col=1)
+    if fb_track is not None:
+        moving.append(len(fig.data))
+        fig.add_trace(_sphere(fb_track[0], FLYBY_GREY, "scrub-fb"), row=1, col=1)
     moving.append(len(fig.data))
     fig.add_trace(go.Scatter(x=[days[0], days[0]], y=[0, 105], mode="lines",
                              line=dict(color=SPACECRAFT, width=1.5, dash="dot"),
@@ -306,6 +340,8 @@ def _add_scrubber(fig, fine, days, thr, e_track, t_track, have_bodies, n_frames,
         if have_bodies:
             data.append(_sphere(e_track[k], EARTH_BLUE, "scrub-earth"))
             data.append(_sphere(t_track[k], ASTEROID_ORANGE, "scrub-ast"))
+        if fb_track is not None:
+            data.append(_sphere(fb_track[k], FLYBY_GREY, "scrub-fb"))
         data.append(go.Scatter(x=[days[k], days[k]], y=[0, 105], mode="lines",
                                line=dict(color=SPACECRAFT, width=1.5, dash="dot")))
         frames.append(go.Frame(name=f"{days[k]:.0f}", traces=moving, data=data))
@@ -337,7 +373,8 @@ def _add_scrubber(fig, fine, days, thr, e_track, t_track, have_bodies, n_frames,
 def trajectory_diagnostics(node_days, throttle, radial, transverse, normal, i_deg, a_au, e,
                            speed_kms=None, earth_speed_dep=None, target_speed_arr=None,
                            target_a=None, target_e=None, target_i=None,
-                           target_name="", max_throttle_pct=None) -> go.Figure:
+                           target_name="", max_throttle_pct=None, flyby_day=None,
+                           flyby_name="") -> go.Figure:
     """How the trajectory is flown, node by node, for reading and checking it.
 
     Every panel shares the same time axis, days from departure, and they run cause before effect.
@@ -470,4 +507,7 @@ def trajectory_diagnostics(node_days, throttle, radial, transverse, normal, i_de
     fig.update_yaxes(gridcolor=GRID, color=MUTED, zeroline=False)
     fig.update_xaxes(title="days from departure", row=nrows, col=1)
     fig.update_annotations(font=dict(color=TEXT, size=12))   # subplot titles -> readable
+    if flyby_day is not None:
+        _phase_transition_lines(fig, [flyby_marker(flyby_day, flyby_name)],
+                                rows=tuple(range(1, nrows + 1)))
     return fig

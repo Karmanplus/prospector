@@ -9,6 +9,7 @@ from __future__ import annotations
 from nicegui import ui
 from pydantic import ValidationError
 
+from prospector import figures
 from ui import report_export, settings, state
 from ui.components import vehicle_build_mass_rows, vehicle_drive_rows
 from ui.state import S
@@ -67,6 +68,7 @@ def header() -> None:
                 "flex:1 1 0;min-width:0;gap:.6rem"):
             _diff_chip("my_location", _focus_label(), state.target_modified(),
                        _reset_target, _overwrite_target)
+            _flyby_chip()
             _vehicle_chip()
             _propellant_pill()
             ui.button("Save", icon="save", on_click=_save).props(
@@ -230,6 +232,33 @@ def _hover_grid(title: str, rows: list) -> None:
                 color = RED if val.lstrip().startswith("-") else TEXT
                 ui.label(val).style(
                     f"color:{color};font-size:.72rem;font-family:monospace;white-space:nowrap")
+
+
+def _flyby_chip() -> None:
+    """"via Mars" beside the target; once solved, the tooltip carries the flyby found."""
+    body = S.mission.gravity_assist
+    if not body:
+        return
+    res = flight._cruise_result(S.solve_run_id)
+    sf = (res or {}).get("sf") or {}
+    fb = sf.get("flyby")
+    with ui.row().classes("items-center no-wrap cursor-default").style("gap:.2rem;min-width:0"):
+        ui.icon("sync_alt").style(f"color:{ACCENT}").classes("text-sm")
+        chip = ui.label(f"via {body.capitalize()}").style(
+            f"color:{ACCENT};font-size:.82rem;white-space:nowrap")
+    if fb:
+        direct = sf.get("direct") or {}
+        saved = (float(direct["propellant_kg"]) - float(sf["propellant_kg"])
+                 if direct.get("propellant_kg") is not None else None)
+        when = figures.mjd2000_to_datetime(float(fb["mjd2000"])).strftime("%d %b %Y")
+        tip = (f"{body.capitalize()} flyby {when} at {fb['periapsis_alt_km']:,.0f} km, "
+               f"{fb['vinf_kms']:.2f} km/s relative, turned {fb['turn_deg']:.0f}°")
+        if saved is not None:
+            tip += f" · {'saves' if saved >= 0 else 'costs'} {abs(saved):.0f} kg against flying direct"
+        chip.tooltip(tip)
+    else:
+        chip.tooltip("Every transfer for this mission swings past this planet; "
+                     "run the cruise to see the flyby")
 
 
 def _propellant_pill() -> None:

@@ -25,6 +25,7 @@ from nicegui import run, ui
 from prospector import figures, jobs, trajectory_export
 from prospector.config import ResolvedConfig
 from prospector.figures import products
+from prospector.figures.trajectory import flyby_marker
 from prospector.solvers.spiral import belt_power_profile
 from prospector.spacecraft.radiation import load_radiation_models
 from prospector.trades import sweep
@@ -77,6 +78,7 @@ _traj_marker: dict = {}                 # trace name -> index (spacecraft / Eart
 _traj_sc = None                         # spacecraft path (AU), one row per fine sample
 _traj_earth = None                      # Earth track (AU), aligned with _traj_sc
 _traj_ast = None                        # target track (AU), aligned with _traj_sc
+_traj_fb = None                         # gravity-assist body track (AU), aligned with _traj_sc; None without one
 _traj_days = None                       # day-from-departure per sample (drives the thrust cursor)
 _traj_esc_frac = 0.0                    # where the cruise phase begins on the global timeline
 _traj_cruise_end_frac = 1.0             # where the cruise phase ends (1.0 when there is no return)
@@ -248,7 +250,9 @@ def _journey_strip(rc) -> None:
     payload it ADDS (``+NNN kg``)."""
     from datetime import timedelta
     res = _cruise_result(S.solve_run_id)
-    solved = res is not None
+    # A run that did not converge has no propellant figure to quote: the strip shows its dates and
+    # nothing about the tank, the same as before a solve.
+    solved = res is not None and _converged(res["sf"]["feasible"], res["sf"]["mismatch"])
     # Escape time is real only once a spiral has been flown this session (or the LV provides it).
     escape_known = rc.launch.escape_provided or state.session_spiral_run(rc) is not None
     esc_days = 0.0 if rc.launch.escape_provided else float(rc.escape_tof_days)
@@ -333,10 +337,28 @@ def _journey_strip(rc) -> None:
         # Nothing between them: the escape ends where the cruise begins.
         _journey_node(_date(escape_dt), "Cruise start", None,
                       _cruise_start_tip(sched, solved))
-        _journey_leg("cruise", cruise_days, None if cruise_dv is None else f"{cruise_dv:.1f} km/s",
-                     kg_spent(cruise_prop),
-                     "Heliocentric cruise"
-                     + ("" if solved else " - run the cruise solve for its time, ΔV, and propellant"))
+        fb = leg.get("flyby") if solved else None
+        if fb:
+            # Two legs joined at the flyby: each shows its own time and propellant, the node the
+            # planet, the date and what remains after it.
+            body = str(fb.get("body", "planet")).capitalize()
+            leg_prop = fb.get("leg_propellant_kg") or [None, None]
+            after_fb = (usable - (esc_prop or 0.0) - float(leg_prop[0])
+                        if leg_prop[0] is not None else None)
+            _journey_leg("cruise", float(fb["tof1_days"]), None, kg_spent(leg_prop[0]),
+                         f"Heliocentric cruise to {body}")
+            _journey_node(_date(figures.mjd2000_to_datetime(float(fb["mjd2000"])).date()),
+                          f"{body} flyby", kg_rem(after_fb),
+                          f"unpowered flyby at {fb['periapsis_alt_km']:,.0f} km, "
+                          f"{fb['vinf_kms']:.2f} km/s relative, turned {fb['turn_deg']:.0f}°"
+                          + (f" · {after_fb:.0f} kg propellant remaining" if after_fb is not None else ""))
+            _journey_leg("cruise", float(fb["tof2_days"]), None, kg_spent(leg_prop[1]),
+                         f"Heliocentric cruise from {body} to the target")
+        else:
+            _journey_leg("cruise", cruise_days, None if cruise_dv is None else f"{cruise_dv:.1f} km/s",
+                         kg_spent(cruise_prop),
+                         "Heliocentric cruise"
+                         + ("" if solved else " - run the cruise solve for its time, ΔV, and propellant"))
         _journey_node(_date(arrival_dt), "Arrival", kg_rem(prop_left),
                       ("predicted arrival at the target" if solved else "predicted after the cruise solve")
                       + (f" · {prop_left:.0f} kg propellant remaining" if prop_left is not None else ""))
@@ -675,7 +697,7 @@ def _outbound_plot(rc, res: dict, block: dict, tgt: dict, span: dict) -> None:
     # asteroid and thrust cursor) with no Play button or slider, since the mission timeline moves
     # them
     # via Plotly.restyle (see _scrub_traj), never recomputing the arc.
-    global _traj_plot, _traj_marker, _traj_sc, _traj_earth, _traj_ast, _traj_days
+    global _traj_plot, _traj_marker, _traj_sc, _traj_earth, _traj_ast, _traj_fb, _traj_days
     global _traj_esc_frac, _traj_cruise_end_frac
     fr = _phase_fracs(span)
     # The cruise starts after the escape and any wait at the handover.
@@ -684,16 +706,24 @@ def _outbound_plot(rc, res: dict, block: dict, tgt: dict, span: dict) -> None:
     _traj_earth = np.asarray(res["orbits"]["earth_track_au"], float)
     _traj_ast = np.asarray(res["orbits"]["target_track_au"], float)
     _traj_days = np.asarray(block["fine_times_days"], float)
+    # A gravity-assist body moves through the scene like Earth and the target, so the encounter
+    # is visible when the timeline is scrubbed to the flyby.
+    orbits = res["orbits"]
+    fb_track = orbits.get("flyby_track_au")
+    _traj_fb = None if fb_track is None else np.asarray(fb_track, float)
     fig = figures.trajectory_3d(
         block["fine_positions_au"], block["fine_throttle"], block["fine_times_days"],
-        block["node_times_days"], block["throttle"], res["orbits"]["earth_au"],
-        res["orbits"]["target_au"], res["orbits"]["earth_track_au"],
-        res["orbits"]["target_track_au"], _fmt(block["dep_mjd2000"]),
+        block["node_times_days"], block["throttle"], orbits["earth_au"],
+        orbits["target_au"], orbits["earth_track_au"],
+        orbits["target_track_au"], _fmt(block["dep_mjd2000"]),
         _fmt(block["dep_mjd2000"] + block["tof_days"]), tgt["name"], block["dv_kms"],
         block["tof_days"], target_i_deg=tgt["i"], controls=False,
-        max_throttle_pct=_available_thrust_fraction(rc) * 100.0)
+        max_throttle_pct=_available_thrust_fraction(rc) * 100.0,
+        flyby_orbit_au=orbits.get("flyby_au"), flyby_track_au=fb_track,
+        flyby_name=str(orbits.get("flyby_name") or "").capitalize(),
+        flyby_day=(block["flyby"]["tof1_days"] if block.get("flyby") else None))
     _traj_marker = {n: _trace_index(fig, n)
-                    for n in ("scrub-sc", "scrub-earth", "scrub-ast", "scrub-cursor")}
+                    for n in ("scrub-sc", "scrub-earth", "scrub-ast", "scrub-fb", "scrub-cursor")}
     _traj_plot = _fig(fig, "traj-3d")
     _scrub_traj(S.timeline_t)              # sync the markers to the current playhead
 
@@ -787,12 +817,27 @@ def _lowthrust_cards(block: dict, lam: dict) -> None:
         ("Departure", _fmt(dep)),
         ("Arrival", _fmt(arr)),
     ]
+    # A rendezvous arrives within the solver's small slack; anything above it is a pass the
+    # mission asked for, so the speed of the pass is part of the answer.
+    if float(block.get("vinf_arr_kms") or 0.0) > 0.2:
+        cards.append(("Arrival speed", f"{float(block['vinf_arr_kms']):.2f} km/s relative"))
     # The share of the whole cruise spent firing. The busiest single segment is a per-segment
     # figure, not a mission one, so it belongs on the thrust profile's hover next to the segment it
     # describes rather than beside the mission totals.
     duty = products.cruise_duty_cycle(block)
     if duty is not None:
         cards.append(("Duty cycle · whole cruise", f"{duty['mean'] * 100:.1f} %"))
+    fb = block.get("flyby")
+    if fb:
+        body = str(fb.get("body", "planet")).capitalize()
+        direct = block.get("direct") or {}
+        saved = (float(direct["propellant_kg"]) - float(block["propellant_kg"])
+                 if direct.get("propellant_kg") is not None else None)
+        cards.append((f"{body} flyby", _fmt(fb["mjd2000"])))
+        cards.append(("Flyby altitude", f"{fb['periapsis_alt_km']:,.0f} km"))
+        cards.append(("Flyby speed · turn", f"{fb['vinf_kms']:.2f} km/s · {fb['turn_deg']:.0f}°"))
+        if saved is not None:
+            cards.append(("Against flying direct", f"{saved:+.0f} kg" if saved < 0 else f"saves {saved:.0f} kg"))
     _stat_cards(cards)
 
 
@@ -978,7 +1023,9 @@ def _diagnostics_view(rc) -> None:
                       earth_speed_dep=block.get("earth_speed_dep_kms"),
                       target_speed_arr=block.get("target_speed_arr_kms"), target_a=tgt["a"],
                       target_e=tgt["e"], target_i=tgt["i"], target_name=tgt["name"],
-                      max_throttle_pct=_available_thrust_fraction(rc) * 100.0),
+                      max_throttle_pct=_available_thrust_fraction(rc) * 100.0,
+                      flyby_day=(block["flyby"]["tof1_days"] if block.get("flyby") else None),
+                      flyby_name=str((block.get("flyby") or {}).get("body", "")).capitalize()),
                   "diag-sf", height=height)
         # The range-to-Earth/target/Sun profile has moved to the Mission profile sub-tab, where it
         # sits on the whole-mission clock beside the power and engine timelines.
@@ -1138,7 +1185,7 @@ def _mission_profile_view(rc) -> None:
         _empty("stacked_line_chart", "Converge a cruise solve first.")
         return
     from prospector.spacecraft import buildability
-    bm = buildability.load_bus_model()
+    bm = buildability.load_bus_model(name=rc.build_model)
     am = bm.array_model()
     teff = rc.thruster_chain_eff(bm)
     reserve = rc.array_reserve_W(bm)                # array output the bus keeps for housekeeping
@@ -1150,6 +1197,10 @@ def _mission_profile_view(rc) -> None:
     cruise_end = esc_days + float(span["cruise_days"])
     ret_start = cruise_end + float(span["stay_days"])
     transitions = [(esc_days, "Earth departure")] if esc_days > 0 else []
+    fb = res["sf"].get("flyby")
+    if fb:
+        transitions.append(flyby_marker(esc_days + float(fb["tof1_days"]),
+                                        str(fb.get("body", "")).capitalize()))
     if ret:
         transitions.append((ret_start, "return"))
 
@@ -1356,7 +1407,7 @@ def _radiation_controls() -> None:
 
 
 def _vinf_slider(rc) -> None:
-    labeled_slider("Departure speed v∞", 0.0, 5.0, float(S.departure_vinf), 0.25, "{:.2f}", " km/s",
+    labeled_slider("Departure speed v∞", 0.0, 6.0, float(S.departure_vinf), 0.25, "{:.2f}", " km/s",
                    on_change=lambda e: _set_launch(vinf=e.value)).tooltip(
         "Speed left over after escape, relative to Earth. The cruise gets it for free.")
 
@@ -1856,7 +1907,8 @@ def _scrub_traj(t: float) -> None:
     frac = _clampfrac((t - _traj_esc_frac) / span) if span > 0 else 1.0
     i = int(round(frac * (len(_traj_sc) - 1)))
     idxs, xs, ys, zs = [], [], [], []
-    for name, arr in (("scrub-sc", _traj_sc), ("scrub-earth", _traj_earth), ("scrub-ast", _traj_ast)):
+    for name, arr in (("scrub-sc", _traj_sc), ("scrub-earth", _traj_earth), ("scrub-ast", _traj_ast),
+                      ("scrub-fb", _traj_fb)):
         mi = _traj_marker.get(name)
         if mi is None or arr is None or len(arr) != len(_traj_sc):
             continue

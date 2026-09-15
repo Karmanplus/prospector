@@ -1,0 +1,17 @@
+name: Hayabusa2 to Ryugu (flown 2014)
+# A flown mission as a check on the tool: JAXA's Hayabusa2 from launch, through its Earth swing-by a year later. Compare with the 24 kg it spent; see docs/validation.md.
+mission: hayabusa2-to-ryugu
+vehicle: hayabusa2
+target: 162173 Ryugu
+screening:
+  h_max: 22.0
+  dv_margin_factor: 1.0
+  reference: 162173 Ryugu
+desirability:
+  min_tier: null
+  taxonomy_include: []
+  min_period_h: null
+  max_period_h: null
+  min_diameter_m: null
+  max_diameter_m: null
+build_model: default

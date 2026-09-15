@@ -272,7 +272,7 @@ def _load(session: dict) -> dict:
     """Rows + metadata for one session, filtered to the live rail. The frame is loaded fresh
     each render so a running session's table grows as evaluations stream in."""
     meta = session.get("meta") or {}
-    rows = vs.with_buildability(vs.load_rows(session["dir"]), meta.get("engine"))
+    rows = vs.with_buildability(vs.load_rows(session["dir"]), meta.get("engine"), S.build_model)
     if len(rows):
         # Sessions predating per-row engine keys carry one in their metadata; falling back to a
         # literal would name an engine a different library may not hold.
@@ -776,7 +776,7 @@ def _launcher(on_started: Callable[[], None] | None = None) -> None:
     # omitted here (the Thrust-limit slider already sets it).
     model_keys = {k: spec for k, spec in buildability.SWEEPABLE.items()
                   if spec[2] == "model"}
-    bus = buildability.load_bus_model()
+    bus = buildability.load_bus_model(name=S.build_model)
     ui.label("Sweep a model setting").style(
         f"color:{MUTED};font-size:.7rem;margin-top:.3rem")
     with ui.row().classes("items-end no-wrap w-full gap-2"):

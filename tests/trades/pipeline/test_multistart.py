@@ -100,8 +100,9 @@ def test_multistart_falls_back_when_every_start_fails(monkeypatch):
     monkeypatch.setattr(ms, "_outbound_start", lambda args: None)   # all starts raised
     monkeypatch.setattr(ms.lb, "planet_from_row", lambda row: object())
     sentinel = _sol(False, 0.9, 123.0)
-    monkeypatch.setattr(ms.sf, "solve_for_config",
-                        lambda *a, **k: sentinel)            # single honest clicked-seed solve
+    # The single honest clicked-seed solve, whichever leg solver the mission picks.
+    monkeypatch.setattr(ms.transfer, "for_config",
+                        lambda rc: SimpleNamespace(solve_for_config=lambda *a, **k: sentinel))
     best = pipeline._multistart_outbound(rc, {"a": 1.1}, seed, sf_kwargs={}, n_starts=6,
                                          workers=1, max_revs=2, scaled=lambda *a: None)
     assert best is sentinel

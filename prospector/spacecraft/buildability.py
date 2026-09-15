@@ -49,15 +49,41 @@ from prospector.yamlio import dump_preserving_comments, warn_unknown_keys
 # a xenon one. A real gas passes its own density from the propellant library.
 REFERENCE_DENSITY_KG_M3 = 1990.5
 
-# The sizing/cost model is a file-based, application-level config: one YAML, not a hardcoded source
-# default, so the coefficients are tunable in the settings window. The field defaults below remain
-# the seed used when the file is absent.
-def default_bus_model_path() -> Path:
-    """The sizing/cost model file in the active config library.
+# Sizing/cost profiles: one YAML per profile in ``configs/build-models/``, named by
+# ``Study.build_model``. A pre-profile library's single ``configs/build-model.yaml`` is the
+# "default" profile, read and written in place. Field defaults fill in a partial file.
+DEFAULT_BUS_MODEL = "default"
 
-    Resolved per call, never captured at import, so an override cannot be silently ignored (see
-    :func:`prospector.paths.config_dir`)."""
+
+def default_bus_models_dir() -> Path:
+    """The profile library directory, resolved per call (see :func:`prospector.paths.config_dir`)."""
+    return paths.config_dir() / "build-models"
+
+
+def _legacy_bus_model_path() -> Path:
     return paths.config_dir() / "build-model.yaml"
+
+
+def bus_model_path(name: str = DEFAULT_BUS_MODEL) -> Path:
+    """``build-models/<name>.yaml``; for "default" in a pre-profile library, ``build-model.yaml``."""
+    path = default_bus_models_dir() / f"{paths.config_name(name)}.yaml"
+    if name == DEFAULT_BUS_MODEL and not path.is_file() and _legacy_bus_model_path().is_file():
+        return _legacy_bus_model_path()
+    return path
+
+
+def default_bus_model_path() -> Path:
+    """The default profile's file in the active config library."""
+    return bus_model_path(DEFAULT_BUS_MODEL)
+
+
+def list_bus_models() -> list[str]:
+    """Sorted profile names, "default" included when only the pre-profile file exists."""
+    d = default_bus_models_dir()
+    names = {p.stem for p in d.glob("*.yaml")} if d.is_dir() else set()
+    if _legacy_bus_model_path().is_file():
+        names.add(DEFAULT_BUS_MODEL)
+    return sorted(names)
 
 
 class BusModel(BaseModel):
@@ -84,6 +110,9 @@ class BusModel(BaseModel):
     %/yr aging term.
     """
 
+    # -- flight rules --
+    # Lowest gravity-assist periapsis altitude (km above the surface): the navigation margin.
+    flyby_min_altitude_km: float = 500.0
     # -- power chain --
     housekeeping_W: float = 165.0      # GNC 25 + C&DH 35 + wheels 10 + cameras 15 + thermal 80
     ops_load_W: float = 600.0          # payload 300 + comms TX 300 (thrust off)
@@ -192,18 +221,19 @@ class BusModel(BaseModel):
         )
 
 
-def load_bus_model(path: str | Path | None = None) -> BusModel:
-    """The configured sizing and cost model.
-
-    Raises :class:`FileNotFoundError` when the file is absent, since every mass and cost here is
-    scaled by these coefficients. Within the file, unknown keys are ignored and missing ones fall
-    back to the field default, which lets a partial file survive a new coefficient being added.
-    """
-    path = Path(path) if path is not None else default_bus_model_path()
+def load_bus_model(path: str | Path | None = None, *, name: str | None = None) -> BusModel:
+    """The sizing and cost model: profile ``name`` (default profile when neither argument is
+    given) or the file at ``path``. Raises :class:`FileNotFoundError` when absent; unknown keys
+    are ignored, missing ones take the field default. Re-read every call so settings edits apply
+    on the next render."""
+    if path is not None and name is not None:
+        raise TypeError("give a path or a profile name, not both")
+    path = Path(path) if path is not None else bus_model_path(name or DEFAULT_BUS_MODEL)
     if not path.is_file():
+        available = ", ".join(list_bus_models()) or "(none)"
         raise FileNotFoundError(
             f"no build model at {path}; the sizing and cost coefficients are file-based and "
-            f"have no built-in fallback")
+            f"have no built-in fallback. Profiles in this library: {available}")
     data = yaml.safe_load(path.read_text()) or {}
     warn_unknown_keys(data, BusModel.model_fields, path)
     if not data.get("array_mass_curve"):
@@ -222,9 +252,13 @@ def load_bus_model(path: str | Path | None = None) -> BusModel:
     return BusModel.model_validate(known)
 
 
-def save_bus_model(model: BusModel, path: str | Path | None = None) -> Path:
-    """Persist the sizing/cost model to ``configs/build-model.yaml`` and return the path."""
-    path = Path(path) if path is not None else default_bus_model_path()
+def save_bus_model(model: BusModel, path: str | Path | None = None, *,
+                   name: str | None = None) -> Path:
+    """Write the model as profile ``name`` (default when neither argument is given, at
+    :func:`bus_model_path`) or to ``path``; returns the path written."""
+    if path is not None and name is not None:
+        raise TypeError("give a path or a profile name, not both")
+    path = Path(path) if path is not None else bus_model_path(name or DEFAULT_BUS_MODEL)
     path.parent.mkdir(parents=True, exist_ok=True)
     return dump_preserving_comments(model.model_dump(mode="json"), path)
 
@@ -746,14 +780,14 @@ def assess_assembly(*, dry_kg: float, prop_kg: float, mounts, catalog,
                   margin_pct=margin_pct, model=m)
 
 
-def mass_allocation_components(build: dict, *, dry_mass_kg: float,
-                               n_engines: int) -> list[tuple[str, float]]:
+def mass_allocation_components(build: dict, *, dry_mass_kg: float, n_engines: int,
+                               model: BusModel | None = None) -> list[tuple[str, float]]:
     """The ``(label, kg)`` dry-mass slices for the allocation chart; they sum to the dry mass.
 
     The auto-sized hardware comes straight from the build assessment; the fixed-fraction subsystems
     and the leftover payload-and-margin reserve close the budget to the dry mass.
     """
-    m = load_bus_model()
+    m = model or load_bus_model()
     dry = float(dry_mass_kg)
     n = int(n_engines)
     comps = [

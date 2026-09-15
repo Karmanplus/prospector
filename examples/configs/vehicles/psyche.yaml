@@ -1,0 +1,19 @@
+name: Psyche (2023)
+# NASA's Psyche as launched, from the JPL press-kit quick facts: launch mass 2747 kg including the
+# DSOC demonstration, 1085 kg of xenon loaded (the 922 kg in older articles is the 2021 design),
+# so 1662 kg of everything else, including the nitrogen cold gas, is the dry mass here. Four
+# SPT-140 Hall thrusters on two gimballed modules; only one fires at a time, so one is mounted.
+# The array makes 21 kW leaving Earth (2.3 to 3.4 kW at Psyche).
+#
+# Bus numbers for a Psyche settings profile: array 21 kW BOL at 1 AU, Maxar EPS 2.0 chain, thrust
+# duty cycle 80% Earth-Mars and 85% Mars-Psyche (IEPC-2019-192, Table 5).
+dry_mass: 1662.0
+fuel_mass: 1085.0
+unusable_prop: 10.0      # assumed residual; not published
+engines:
+- type: spt-140
+  count: 1
+solar_power_W: 21000.0
+area_m2: 0.0
+propellant: null
+array_margin_pct: 0.0

@@ -9,7 +9,8 @@ step is visible in a desktop app.
 
 It screens the catalogue in seconds from orbital elements alone, then narrows it by what a target
 is made of, how big it is and how well it holds together. Escape and cruise are planned together,
-since they trade against each other. Vehicles can be compared across dry mass, propellant load,
+since they trade against each other, and a mission can swing past a planet on the way, the two
+legs solved as one. Vehicles can be compared across dry mass, propellant load,
 engine count and working gas, and a study exports as a standalone PDF or a trajectory bundle for a
 3D viewer.
 
@@ -26,7 +27,7 @@ everything is derived from.
 | ![The Trajectory tab](docs/images/trajectory.png) | ![The Earth escape tab](docs/images/escape.png) |
 | A converged cruise, coloured by throttle, picked off a grid of real trajectories over departure date and flight time. | The escape spiral out of the drop-off orbit: eclipses, the Sun and Moon, drag, and the array wearing down in the radiation belts. |
 | ![The engine library](docs/images/engine-library.png) | ![Global settings](docs/images/global-settings.png) |
-| The engine library: one thruster's numbers, and a throttle curve pasted from its datasheet. | Global settings: the coefficients every vehicle is sized and costed from. |
+| The engine library: one thruster's numbers, and a throttle curve pasted from its datasheet. | Global settings: the coefficients a project's vehicles are sized and costed from, one profile of several. |
 
 ## Install
 
@@ -68,9 +69,11 @@ Engines, launch types, propellants, missions, vehicles, studies and sizing coeff
 `configs/` as YAML, read at run time. Git does not track that directory; it is yours, and it never
 travels back with the code. Skip the copy and the app says so and prints the command.
 
-`examples/configs` is the template you copied from: three synthetic thrusters, and one mission,
-vehicle and study that build and fly. Every file is annotated with what its numbers mean and which
-are placeholders. Set `PROSPECTOR_CONFIG_DIR` to keep the library elsewhere.
+`examples/configs` is the template you copied from: three synthetic thrusters with one mission,
+vehicle and study that build and fly, plus three flown missions, Dawn, Psyche and Hayabusa2, with
+their real engines and masses from public sources, so you can check the tool against history
+([`docs/validation.md`](docs/validation.md)). Every file is annotated with what its numbers mean
+and which are placeholders. Set `PROSPECTOR_CONFIG_DIR` to keep the library elsewhere.
 
 <details>
 <summary><strong>Sharing a library with your team</strong></summary>

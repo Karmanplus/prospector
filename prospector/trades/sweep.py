@@ -295,7 +295,9 @@ def _point_from_result(point: dict, rc_point: ResolvedConfig, result: dict) -> d
         # depends on its trajectory (the mean of its segments' operating points), so a rebuild
         # cannot derive it and has to be handed it.
         "cruise_thrust_N": _maybe_float(sf.get("thrust_N")),
-        "cruise_isp_s": _maybe_float(sf.get("isp_s")),
+        # A two-leg point keeps the pair of leg Isps, which is what its rebuild needs.
+        "cruise_isp_s": (list(sf["flyby"]["leg_isp_s"]) if sf.get("flyby")
+                         else _maybe_float(sf.get("isp_s"))),
         "cruise_seg_isp_s": _as_list(sf.get("seg_isp_s")),
     })
 

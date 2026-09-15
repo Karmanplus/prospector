@@ -67,6 +67,7 @@ EARTH_BLUE = "#4aa3ff"  # blue -- Earth's orbit + Earth sphere on the trajectory
 
 
 ASTEROID_ORANGE = "#ff9f43"   # orange -- the target's orbit + asteroid sphere
+FLYBY_GREY = "#b0b8c4"       # grey -- a gravity-assist planet's orbit + sphere
 
 
 DEPARTURE = "#e6e9f2"   # near-white -- the departure point (kept off-blue so it isn't "Earth")

@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 
 from prospector.solvers import lambert as lb
-from prospector.solvers import simsflanagan as sf
+from prospector.solvers import transfer
 
 
 def _better_sol(cand, best) -> bool:
@@ -161,7 +161,7 @@ def _outbound_start(args):
         name = str(target_row.get("full_name") or target_row.get("pdes") or "target")
         seed = lb.lambert_transfer(earth, target, dep_mjd, arr_mjd,
                                    target_name=name, max_revs=max_revs)
-        return sf.solve_for_config(rc, target, seed=seed, **sf_kwargs)
+        return transfer.for_config(rc).solve_for_config(rc, target, seed=seed, **sf_kwargs)
     except Exception:
         return None
 
@@ -192,6 +192,7 @@ def _multistart_outbound(rc, target_row, seed, sf_kwargs, n_starts, workers, max
         # Every start raised, which happens with a window too short to fly. Fall back to a single
         # solve from the clicked cell, so the failure looks the same as it would if this code were
         # not here.
-        best = sf.solve_for_config(rc, lb.planet_from_row(target_row), seed=seed, **sf_kwargs)
+        best = transfer.for_config(rc).solve_for_config(rc, lb.planet_from_row(target_row),
+                                                        seed=seed, **sf_kwargs)
     return best
 

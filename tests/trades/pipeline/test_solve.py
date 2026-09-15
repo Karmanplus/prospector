@@ -22,6 +22,8 @@ def rc() -> ResolvedConfig:
     mission = load_mission(lib.mission_key())
     mission = mission.model_copy(update={
         "launch_orbit": "TLI",          # LV-provided escape: no spiral draw on the tank
+        "gravity_assist": None,         # a direct rendezvous: the example missions fly assists
+        "arrival_vinf_kms": 0.0,
         "return_trip": True,
         "return_by": mission.arrive_by.replace(year=2032),
         "return_destination": "EML2",

@@ -1,0 +1,22 @@
+name: DART to Didymos (2021-2022)
+# NASA's DART: launched 24 November 2021 on a Falcon 9 to a low-energy escape, coasted 306 days and
+# struck Dimorphos, the moon of (65803) Didymos, on 26 September 2022 at 6.1 km/s relative to it
+# (DART final technical report, NASA/NTRS 20230015804). The launch energy is not stated there; the
+# ballistic Earth-to-Didymos transfer on the flown dates needs 2.53 km/s of departure speed and
+# arrives at 6.2 km/s, so departure_vinf_kms carries 2.53 and arrival_vinf_kms allows up to 6.5:
+# the cruise may pass the target at up to that speed, which is what an impactor does.
+launch_window:
+- '2021-11-22'
+- '2021-11-28'
+launch_orbit: ESCAPE
+departure_vinf_kms: 2.53
+gravity_assist: null
+arrival_vinf_kms: 6.5
+arrive_by: '2022-09-26'
+return_trip: false
+return_by: null
+return_destination: EML2
+return_orbit_insert_dv: null
+return_max_tof_days: null
+time_at_asteroid: 0.0
+asteroid_payload_mass: 0.0

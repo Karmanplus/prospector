@@ -72,7 +72,7 @@ def _build() -> Path:
         products.mass_allocation_figure(
             buildability.mass_allocation_components(
                 build, dry_mass_kg=float(rc.vehicle.dry_mass),
-                n_engines=rc.vehicle.engine_count) if build else None,
+                n_engines=rc.vehicle.engine_count, model=rc.bus_model()) if build else None,
             dry_mass_kg=float(rc.vehicle.dry_mass)),
         products.array_power_figure(spiral))
     cruise_figs = products.cruise_figures(

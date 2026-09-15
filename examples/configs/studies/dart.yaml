@@ -1,0 +1,19 @@
+name: DART to Didymos (flown 2021)
+# A flown mission as a check on the tool's arrival types: DART's direct route to Didymos, arriving
+# at up to 6.5 km/s relative to it (an impactor), against the 6.1 km/s it struck Dimorphos at. The
+# launcher flew the route; the ion engine should have almost nothing to do. See docs/validation.md.
+mission: dart-to-didymos
+vehicle: dart
+target: 65803 Didymos
+screening:
+  h_max: 22.0
+  dv_margin_factor: 1.0
+  reference: 65803 Didymos
+desirability:
+  min_tier: null
+  taxonomy_include: []
+  min_period_h: null
+  max_period_h: null
+  min_diameter_m: null
+  max_diameter_m: null
+build_model: default

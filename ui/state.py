@@ -55,6 +55,7 @@ class AppState:
     # Library keys the mission/vehicle came from, so a study save can overwrite the parts it
     # references (None => never saved => save under a name slugged from the part's own name).
     mission_key: str | None = None
+    build_model: str = "default"        # the open study's build-model profile (Global settings)
     vehicle_key: str | None = None
     dirty: bool = False
 
@@ -171,9 +172,11 @@ def open_project(name: str) -> list[str]:
     S.mission = load_mission(study.mission)
     # Size the array on the way in, the same as the vehicle editor does on every keystroke, so the
     # top-bar chip and the mass cards read the array this vehicle flies before anything is edited.
-    S.vehicle = buildability.with_sized_array(load_vehicle(study.vehicle), load_engines())
+    S.vehicle = buildability.with_sized_array(load_vehicle(study.vehicle), load_engines(),
+                                              buildability.load_bus_model(name=study.build_model))
     S.mission_key = study.mission
     S.vehicle_key = study.vehicle
+    S.build_model = study.build_model
     S.screening = study.screening
     S.desirability = study.desirability
     S.dirty = False
@@ -184,6 +187,8 @@ def open_project(name: str) -> list[str]:
     S.project_vehicle = S.vehicle.model_copy(deep=True)
     S.project_target = resolve_target(study.target) if study.target else None
     S.focus = (dict(S.project_target) if S.project_target else None)
+    # The mission's planned departure speed is the baseline; a remembered session below overrides it.
+    S.departure_vinf = float(S.mission.departure_vinf_kms or 0.0)
     # Re-adopt the runs and knobs this project was last left with. Imported here rather than at
     # module scope: the session module reads state through this one.
     from ui import session
@@ -195,6 +200,7 @@ def close_project() -> None:
     S.project = None
     S.project_vehicle = None
     S.project_target = None
+    S.build_model = "default"
     _clear_results()
     session.forget()      # the next project's first write must not be compared against this one
 
@@ -277,7 +283,8 @@ def persist_study(name: str, key: str) -> list[str]:
     save_vehicle(S.vehicle, vkey)
     save_mission(S.mission, mkey)
     save_study(Study(name=name, mission=mkey, vehicle=vkey, target=target_designation(S.focus),
-                     screening=S.screening, desirability=S.desirability), key)
+                     screening=S.screening, desirability=S.desirability,
+                     build_model=S.build_model), key)
     S.vehicle_key, S.mission_key = vkey, mkey
     S.project, S.study_name, S.dirty = key, name, False
     # The just-saved working set is the project default now, so clear the "modified" flags.
@@ -320,6 +327,20 @@ def _mission_unchanged(key: str) -> bool:
         return load_mission(key) == S.mission
     except (OSError, ValueError):
         return False
+
+
+def stated_array() -> tuple[float, float] | None:
+    """(power W, area m2) the open vehicle file states, or None when the app sizes the array.
+    A stated array is a hardware number; the editor keeps it through edits."""
+    if not S.vehicle_key:
+        return None
+    try:
+        lib = load_vehicle(S.vehicle_key)
+    except (OSError, ValueError):
+        return None
+    if float(lib.solar_power_W) <= 0.0:
+        return None
+    return float(lib.solar_power_W), float(lib.area_m2)
 
 
 def _vehicle_unchanged(key: str) -> bool:
@@ -556,7 +577,8 @@ def resolved() -> ResolvedConfig:
     analytic estimate stands (priced at the same v∞ via :attr:`ResolvedConfig.departure_vinf_kms`),
     so nothing reads as "already solved" until the user flies the spiral.
     """
-    rc = ResolvedConfig.build(S.mission, S.vehicle, S.screening, load_engines(), S.desirability)
+    rc = ResolvedConfig.build(S.mission, S.vehicle, S.screening, load_engines(), S.desirability,
+                              build_model=S.build_model)
     rc.departure_vinf_kms = S.departure_vinf
     run_id = session_spiral_run(rc)
     if run_id is None:

@@ -15,7 +15,14 @@ from __future__ import annotations
 
 from prospector.solvers import lambert as lb
 from prospector.solvers import simsflanagan as sf
-from prospector.trades.pipeline.arcs import ProgressFn, _assemble_leg, _mission_elements, _noop
+from prospector.solvers import transfer
+from prospector.trades.pipeline.arcs import (
+    ProgressFn,
+    _assemble_flyby,
+    _assemble_leg,
+    _mission_elements,
+    _noop,
+)
 from prospector.trades.pipeline.multistart import (
     _diverse_seed_cells,
     _multistart_outbound,
@@ -26,10 +33,12 @@ from prospector.trades.pipeline.multistart import (
 def _finish(rc, target, earth, target_row, seed, on_progress: ProgressFn, sf_kwargs,
             sol=None, progress_scale: tuple[float, float] = (0.0, 1.0),
             max_revs: int = 2, light: bool = False) -> dict:
-    """Run the Sims-Flanagan solve from ``seed`` and build the result dict. Pass ``sol`` to build around a solution that has already been found, such as a sweep
-    point rebuilt from its stored vector, without solving again. ``progress_scale`` maps this
-    leg's 0..1 progress into part of the bar, so the outbound can report on (0, 0.5) while the
-    return that follows it reports on (0.5, 1.0).
+    """Run the cruise solve from ``seed`` and build the result dict. Pass ``sol`` to build around a
+    solution that has already been found, such as a sweep point rebuilt from its stored vector,
+    without solving again. ``progress_scale`` maps this leg's 0..1 progress into part of the bar,
+    so the outbound can report on (0, 0.5) while the return that follows it reports on (0.5, 1.0).
+
+    The leg solver is :func:`transfer.for_config`'s, and the block is assembled to match.
 
     ``sf_kwargs`` may carry ``n_starts``, where a value above 1 runs several starting guesses
     in parallel through :func:`_multistart_outbound`, and ``starts_workers``, the number of
@@ -51,10 +60,16 @@ def _finish(rc, target, earth, target_row, seed, on_progress: ProgressFn, sf_kwa
             sol = _multistart_outbound(rc, target_row, seed, sf_kwargs, n_starts,
                                        starts_workers, max_revs, scaled)
         else:
-            sol = sf.solve_for_config(rc, target, seed=seed, progress=_sf_progress, **sf_kwargs)
+            sol = transfer.for_config(rc).solve_for_config(rc, target, seed=seed,
+                                                            progress=_sf_progress, **sf_kwargs)
 
-    sf_block, orbits = _assemble_leg(sol, earth, target, 1.0, float(target_row["a"]), scaled,
-                                     light=light)
+    if getattr(sol, "flyby", None):
+        from prospector.solvers import flyby as fb
+        sf_block, orbits = _assemble_flyby(sol, earth, fb.flyby_body(rc.mission.gravity_assist),
+                                           target, float(target_row["a"]), scaled, light=light)
+    else:
+        sf_block, orbits = _assemble_leg(sol, earth, target, 1.0, float(target_row["a"]), scaled,
+                                         light=light)
     scaled("done", 1.0, "complete")
     name = str(target_row.get("full_name") or target_row.get("pdes") or "target")
     return {
@@ -196,7 +211,7 @@ def evaluate_candidate(rc, target_row, *, cells, sf_options: dict, return_option
 
 def solve_from_cell(rc, target_row, dep_mjd2000: float, arr_mjd2000: float, *,
                     on_progress: ProgressFn | None = None, max_revs: int = 2,
-                    **sf_kwargs) -> dict:
+                    compare_direct: bool = True, **sf_kwargs) -> dict:
     """Solve, starting from a chosen (departure, arrival) cell.
 
     The clicked cell is the first start and, with ``n_starts`` above 1, a spread of further cells
@@ -204,9 +219,13 @@ def solve_from_cell(rc, target_row, dep_mjd2000: float, arr_mjd2000: float, *,
     short clicked cell cannot trap the solve. ``x0``, a converged vector from the transfer grid,
     warm-starts the clicked cell. The result's ``lambert`` block summarises the cell that was
     picked.
+
+    With a gravity assist, ``compare_direct`` also solves the cell direct, once, under
+    ``result["sf"]["direct"]``.
     """
     progress = on_progress or _noop
     sf_kwargs = dict(sf_kwargs)
+    compare_direct = bool(sf_kwargs.pop("compare_direct", compare_direct))
     return_options = dict(sf_kwargs.pop("return_options", None) or {})
     n_starts = int(sf_kwargs.pop("n_starts", 1) or 1)
     workers = sf_kwargs.pop("starts_workers", None)
@@ -232,6 +251,8 @@ def solve_from_cell(rc, target_row, dep_mjd2000: float, arr_mjd2000: float, *,
     result = evaluate_candidate(rc, row, cells=cells, sf_options=sf_kwargs,
                                 return_options=return_options, x0=x0, workers=workers,
                                 on_progress=progress, max_revs=max_revs)
+    if rc.mission.gravity_assist and compare_direct:
+        result["sf"]["direct"] = _direct_comparison(rc, target, seed, sf_kwargs, progress)
     result["lambert"] = {
         "best_dep_mjd2000": seed.dep_mjd2000, "best_arr_mjd2000": seed.arr_mjd2000,
         "best_dv_kms": seed.dv_kms, "best_tof_days": seed.tof_days,
@@ -239,6 +260,22 @@ def solve_from_cell(rc, target_row, dep_mjd2000: float, arr_mjd2000: float, *,
         "c3_km2s2": seed.c3_km2s2,
     }
     return result
+
+
+def _direct_comparison(rc, target, seed, sf_kwargs: dict, progress: ProgressFn) -> dict | None:
+    """The same cell flown direct, one start; None when it does not converge, never an error."""
+    progress("direct", 0.97, "solving the direct transfer for comparison")
+    kwargs = {k: v for k, v in sf_kwargs.items()
+              if k not in ("n_starts", "starts_workers", "x0", "compare_direct")}
+    try:
+        direct = sf.solve_for_config(rc, target, seed=seed, **kwargs)
+    except Exception:  # noqa: BLE001  (a comparison that fails is simply absent)
+        return None
+    if not direct.feasible:
+        return None
+    return {"feasible": True, "propellant_kg": float(direct.propellant_kg),
+            "dv_kms": float(direct.dv_kms), "tof_days": float(direct.tof_days),
+            "dep_mjd2000": float(direct.dep_mjd2000)}
 
 
 def result_from_decision(rc, target_row, x, *, on_progress: ProgressFn | None = None,
@@ -253,10 +290,8 @@ def result_from_decision(rc, target_row, x, *, on_progress: ProgressFn | None = 
     departure and arrival v-infinity if that cell has no Lambert solution.
     """
     progress = on_progress or _noop
-    # The return is rebuilt from its own stored solution vector and its own solver settings, so
-    # take both out before the outbound rebuild claims the rest of sf_kwargs. Each leg's
-    # per-segment thrust limits travel the same way, stored next to its vector, so the rebuilt
-    # problems carry the limits they were solved under.
+    # The return rebuilds from its own vector, settings and leg terms; take them out before the
+    # outbound rebuild claims the rest of sf_kwargs.
     return_options = sf_kwargs.pop("return_options", None)
     return_x = sf_kwargs.pop("return_decision_vector", None)
     return_terms = {k: sf_kwargs.pop(f"return_{k}")
@@ -273,7 +308,7 @@ def result_from_decision(rc, target_row, x, *, on_progress: ProgressFn | None = 
     name = str(target_row.get("full_name") or target_row.get("pdes") or "target")
 
     progress("rebuild", 0.1, "rebuilding the stored solution")
-    sol = sf.rebuild_for_config(rc, target, x, **sf_kwargs)
+    sol = transfer.for_config(rc).rebuild_for_config(rc, target, x, **sf_kwargs)
     scale = (0.0, 0.5) if (rc.mission.return_trip and return_x is not None) else (0.0, 1.0)
     result = _finish(rc, target, earth, target_row, seed=None, on_progress=progress,
                      sf_kwargs=sf_kwargs, sol=sol, progress_scale=scale)

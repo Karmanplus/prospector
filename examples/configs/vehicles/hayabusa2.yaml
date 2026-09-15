@@ -1,0 +1,19 @@
+name: Hayabusa2 (2014)
+# JAXA's Hayabusa2 as launched: about 609 kg (JAXA project briefing, June 2018), with 66 kg of
+# xenon (24 kg spent and 42 kg left after the forward cruise, same briefing); everything else,
+# including the 48 kg of hydrazine and MON-3 for the RCS, is the dry mass here. Four mu10 ion
+# engines are mounted and up to three fire at once (29.7 mN combined), so three are mounted. The
+# array made 2.6 kW at 1 AU (1.4 kW at 1.4 AU).
+#
+# Bus numbers for a Hayabusa2 settings profile: array 2.6 kW BOL at 1 AU, ion engine system about
+# 1.25 kW with three engines running.
+dry_mass: 543.0
+fuel_mass: 66.0
+unusable_prop: 2.0       # assumed residual; not published
+engines:
+- type: mu10
+  count: 3
+solar_power_W: 2600.0
+area_m2: 0.0
+propellant: null
+array_margin_pct: 0.0

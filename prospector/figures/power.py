@@ -21,6 +21,7 @@ from prospector.figures.theme import (
     TEXT,
     _layout,
 )
+from prospector.figures.trajectory import _phase_transition_lines
 from prospector.solvers import spiral as _spiral
 
 
@@ -241,12 +242,7 @@ def mission_power_timeline(phases, *, transitions=(), nameplate_W=None,
                       annotation_text=f"nameplate BOL at 1 AU · {float(nameplate_W):,.0f} W",
                       annotation_position="bottom right",
                       annotation_font=dict(color=MUTED, size=11))
-    for day, label in transitions or ():
-        fig.add_vline(x=float(day), line=dict(color=MUTED, width=1.2, dash="dash"),
-                      annotation_text=str(label), annotation_position="top",
-                      annotation_font=dict(color=MUTED, size=10), row=1, col=1)
-        fig.add_vline(x=float(day), line=dict(color=MUTED, width=1.2, dash="dash"), row=2, col=1)
-        fig.add_vline(x=float(day), line=dict(color=MUTED, width=1.2, dash="dash"), row=3, col=1)
+    _phase_transition_lines(fig, transitions, rows=(1, 2, 3))
     _layout(fig, title)
     # Eleven legend entries wrap to two rows, so the legend grows upward from the top panel's
     # edge into a taller top margin rather than over the traces.
@@ -309,11 +305,7 @@ def engine_performance_timeline(phases, *, transitions=(), rated_thrust_mN=None,
                       annotation_text=f"rated {float(rated_thrust_mN):,.0f} mN",
                       annotation_position="bottom right",
                       annotation_font=dict(color=MUTED, size=11))
-    for day, label in transitions or ():
-        fig.add_vline(x=float(day), line=dict(color=MUTED, width=1.2, dash="dash"),
-                      annotation_text=str(label), annotation_position="top",
-                      annotation_font=dict(color=MUTED, size=10), row=1, col=1)
-        fig.add_vline(x=float(day), line=dict(color=MUTED, width=1.2, dash="dash"), row=2, col=1)
+    _phase_transition_lines(fig, transitions, rows=(1, 2))
     _layout(fig, title)
     fig.update_layout(legend=dict(orientation="h", y=1.05, x=0, font=dict(color=MUTED)))
     fig.update_xaxes(color=MUTED, gridcolor=GRID, zeroline=False)

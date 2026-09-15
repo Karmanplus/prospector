@@ -1,0 +1,19 @@
+name: mu10 (Hayabusa2)
+source: >-
+  public: JAXA Hayabusa2 project pages and Nishiyama et al., "In-flight operation of the Hayabusa2 ion
+  engine system on its way to rendezvous with asteroid 162173 Ryugu", Acta Astronautica 166 (2020):
+  10 mN-class microwave-discharge ion engine, Isp 3000 s; four mounted, up to three fired at once
+  (28-30 mN total). Per-unit power is approximate: the system draws about 1.25 kW with three
+  running, and the original Hayabusa unit (8 mN, 3200 s) drew 350 W.
+# The ECR gridded ion engine of Hayabusa2 (2014). Fixed-point unit: no throttle curve, so the model
+# runs it at its rated point or off (discrete, one mode). The Hayabusa2 vehicle mounts THREE.
+isp_s: 3000.0
+thrust_mN: 10.0
+power_W: 400.0
+mass_kg: 3.0            # thruster head; approximate
+cost_musd: 2.0          # placeholder, not a quote
+propellant: xenon
+ppu_bus_side: low
+throughput_kg: null
+lifetime_ignitions: null
+throttle_mode: discrete

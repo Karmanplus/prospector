@@ -23,7 +23,7 @@ from datetime import date
 from nicegui import ui
 from pydantic import ValidationError
 
-from prospector.config import EngineMount, Mission, Vehicle
+from prospector.config import GRAVITY_ASSIST_BODIES, EngineMount, Mission, Vehicle
 from prospector.launch import escape_dv_estimate, load_launch_orbits, load_return_destinations
 from prospector.spacecraft import buildability
 from prospector.spacecraft.propellants import list_propellants, load_propellants
@@ -115,6 +115,27 @@ def _mission_panel() -> None:
 
         section("How it leaves Earth", "north_east")
         _launch_table()
+        _w["mis_ga"] = ui.select(
+            {"": "none (direct)", **{k: k.capitalize() for k in GRAVITY_ASSIST_BODIES}},
+            value=m.gravity_assist or "", label="Gravity assist", on_change=_apply_mission,
+        ).props("dense outlined").classes("w-full").tooltip(
+            "Swing past this planet on the way: every transfer for this mission, the transfer "
+            "grid's cells included, becomes two legs joined by an unpowered flyby and solved "
+            "together. Minimum flyby altitude is in Global settings.")
+        # Arrival: rendezvous, or pass the target at up to a chosen speed (no stay, no return).
+        with ui.row().classes("gap-3 w-full no-wrap items-center"):
+            _w["mis_arr"] = ui.select(
+                {"rendezvous": "Rendezvous", "flyby": "Flyby or impact"},
+                value="flyby" if m.arrival_vinf_kms > 0 else "rendezvous", label="Arrival",
+                on_change=_on_arrival_change).props("dense outlined").classes("flex-grow").tooltip(
+                "Rendezvous matches the target's orbit. Flyby or impact passes it at up to the "
+                "speed beside, which covers a flyby and an impactor alike; a trip that passes the "
+                "target cannot stay at it or return.")
+            _w["mis_arr_v"] = ui.number("Max arrival speed (km/s)",
+                                        value=float(m.arrival_vinf_kms or 6.0), min=0.1, step=0.5,
+                                        on_change=_apply_mission).props("dense outlined").classes(
+                "flex-grow")
+            _w["mis_arr_v"].set_visibility(m.arrival_vinf_kms > 0)
 
         ui.separator().style(f"background:{BORDER}")
         section("Default target", "my_location")
@@ -195,6 +216,21 @@ def _return_fields() -> None:
 def _on_return_toggle() -> None:
     _return_fields.refresh()
     _apply_mission()
+
+
+def _on_arrival_change() -> None:
+    _w["mis_arr_v"].set_visibility(_w["mis_arr"].value == "flyby")
+    _apply_mission()
+
+
+def _arrival_vinf(m_prev) -> float:
+    """Arrival speed bound from the form: 0 for a rendezvous, the field for a flyby."""
+    if not _w.get("mis_arr"):
+        return float(m_prev.arrival_vinf_kms)
+    if _w["mis_arr"].value != "flyby":
+        return 0.0
+    v = _w["mis_arr_v"].value if _w.get("mis_arr_v") else None
+    return float(v) if v else 6.0
 
 
 def _launch_table() -> None:
@@ -304,6 +340,9 @@ def _apply_mission(_=None, edited: str | None = None) -> None:
             name=_w["mis_name"].value or "Untitled mission",
             launch_window=(opens, closes),
             launch_orbit=_launch_orbit,
+            gravity_assist=(_w["mis_ga"].value or None) if _w.get("mis_ga") else m_prev.gravity_assist,
+            arrival_vinf_kms=_arrival_vinf(m_prev),
+            departure_vinf_kms=m_prev.departure_vinf_kms,     # not edited here: authored in the file
             arrive_by=arrives,
             return_trip=ret,
             # The return-leg widgets are built by a refreshable that the toggle rebuilds; on the
@@ -469,10 +508,13 @@ def _apply_vehicle(_=None) -> None:
     except (ValidationError, ValueError, TypeError) as exc:
         _show_error(_vehicle_err, exc)
         return
-    # The array power and the drag area are sized from the loads, the power chain and the margin
-    # rather than typed, and written onto the vehicle here so the editor's own cards show the same
-    # array the spiral and the cruise will fly.
-    v = buildability.with_sized_array(v, load_engines())
+    # Array power and drag area are sized from the loads and margin, not typed; a vehicle whose
+    # file states its array keeps it.
+    stated = state.stated_array()
+    if stated is not None:
+        v = v.model_copy(update={"solar_power_W": stated[0], "area_m2": stated[1]})
+    else:
+        v = buildability.with_sized_array(v, load_engines())
     _show_error(_vehicle_err, None)
     S.vehicle = v
     _mark_dirty()
@@ -539,7 +581,15 @@ def _derivation_card(title: str, icon: str, rows: list[tuple], notes: list[str])
 def _array_derivation() -> None:
     """Where the array power comes from: the heaviest operating mode's load, scaled up for the
     losses each system sits behind, times (1 + margin)."""
-    model = buildability.load_bus_model()
+    stated = state.stated_array()
+    if stated is not None:
+        _derivation_card("How the array is sized", "wb_sunny",
+                         [("Array power when new, at 1 AU", f"{stated[0]:,.0f} W"),
+                          ("Drag area", f"{stated[1]:.1f} m²" if stated[1] > 0 else "not stated")],
+                         ["Stated in the vehicle file, so the loads and the margin do not size it; "
+                          "the cruise flies at the power this array gives."])
+        return
+    model = buildability.load_bus_model(name=S.build_model)
     t = buildability.array_sizing_terms(S.vehicle, load_engines(), model)
     if t is None:
         _derivation_card("How the array is sized", "wb_sunny", [],
@@ -574,7 +624,7 @@ def _array_derivation() -> None:
 def _tank_derivation() -> None:
     """How the propellant tank mass is derived: the propellant volume at its storage density sets
     a fixed-shape pressure vessel whose wall mass follows from the burst pressure."""
-    model = buildability.load_bus_model()
+    model = buildability.load_bus_model(name=S.build_model)
     t = _tank_sizing_terms(S.vehicle, model, load_engines())
     rows = [
         ("Propellant loaded", f"{t['prop_kg']:.0f} kg  ({t['gas']})"),

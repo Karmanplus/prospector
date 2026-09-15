@@ -1,0 +1,19 @@
+name: Dawn (2007)
+# NASA's Dawn as launched, from the Dawn (spacecraft) Wikipedia summary of the NASA fact sheets:
+# launch mass 1217.7 kg, dry mass 747.1 kg, xenon 425 kg, the remainder (45.6 kg) hydrazine for
+# attitude control. Hydrazine is dead weight to this model, so it is folded into the dry mass.
+# Three NSTAR thrusters were mounted and one fired at a time, so one is mounted here. The array
+# made 10.3 kW at 1 AU when new (two 2.3 x 8.3 m wings of triple-junction cells).
+#
+# Bus numbers for a Dawn settings profile, once profiles exist: array 10.3 kW BOL at 1 AU, NSTAR
+# PPU efficiency ~0.92 at full power (Table 9-2 PPU vs engine input), one thruster string live.
+dry_mass: 792.7
+fuel_mass: 425.0
+unusable_prop: 5.0       # assumed residual; not published
+engines:
+- type: nstar
+  count: 1
+solar_power_W: 10300.0
+area_m2: 0.0
+propellant: null
+array_margin_pct: 0.0

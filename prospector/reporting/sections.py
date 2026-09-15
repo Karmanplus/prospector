@@ -24,7 +24,6 @@ from prospector.figures import products
 from prospector.reporting import wording as W
 from prospector.reporting.document import ReportSection
 from prospector.spacecraft.arrays import EXAMPLE_MASS_CURVE
-from prospector.spacecraft.buildability import load_bus_model
 
 
 def parameters_section(rc: ResolvedConfig) -> ReportSection:
@@ -328,7 +327,7 @@ def buildability_section(rc: ResolvedConfig, build: dict | None = None,
             caption="How the dry mass divides across the bus.",
             body=["A component-level mass breakdown was not available for this configuration."])
 
-    m = load_bus_model()
+    m = rc.bus_model()
     buildable = build.get("buildable")
     capacity = build.get("payload_capacity_kg")
     array_kg = build.get("array_kg")
@@ -580,6 +579,15 @@ def cruise_section(rc: ResolvedConfig, sf: dict | None = None,
             ("Cruise propellant", _kg(sf.get("propellant_kg"))),
             ("Segments modeled", str(nseg)),
         ]
+        fb = sf.get("flyby")
+        if fb:
+            body = str(fb.get("body", "planet")).capitalize()
+            rows.insert(4, (f"{body} flyby",
+                            f"{_date_mjd2000(fb['mjd2000'])} at {fb['periapsis_alt_km']:,.0f} km, "
+                            f"{fb['vinf_kms']:.2f} km/s relative, turned {fb['turn_deg']:.0f}°"))
+            direct = sf.get("direct") or {}
+            if direct.get("propellant_kg") is not None:
+                rows.append(("Flying direct instead", _kg(direct["propellant_kg"])))
         if not converged:
             body.append(W.CRUISE["not_converged"])
 

@@ -1,0 +1,20 @@
+name: Psyche to 16 Psyche (2023-2029)
+# Psyche's cruise as flown: launched 13 October 2023 on a Falcon Heavy straight onto an escape
+# trajectory (window opened 5 October), Mars gravity assist 15 May 2026 at about 4600 km, arrival
+# and capture at (16) Psyche in August 2029. The injection was reported as a 794 x -36,991 km
+# hyperbola, a departure speed of about 5.8 km/s relative to Earth (derived, not published
+# directly); departure_vinf_kms below carries it.
+launch_window:
+- '2023-10-05'
+- '2023-10-25'
+launch_orbit: ESCAPE
+departure_vinf_kms: 5.8
+gravity_assist: mars
+arrive_by: '2029-08-31'
+return_trip: false
+return_by: null
+return_destination: EML2
+return_orbit_insert_dv: null
+return_max_tof_days: null
+time_at_asteroid: 0.0
+asteroid_payload_mass: 0.0
